@@ -1,0 +1,41 @@
+xai:
+  methods:
+    gradcam:
+      enabled: true
+      # Target layer names per detector (must match actual architecture)
+      target_layers:
+        yolox-s: "backbone.backbone.dark5.2"     # Last CSP block — verify with model.named_modules()
+        fasterrcnn: "backbone.body.layer4"         # ResNet-50 last block
+      upsample_mode: "bilinear"
+    
+    gcame:
+      enabled: true
+      target_layers:
+        yolox-s: "backbone.backbone.dark5.2"
+        fasterrcnn: "backbone.body.layer4"
+      gaussian_sigma: 2.0        # Gaussian kernel sigma for saliency smoothing
+      gaussian_kernel_size: 11   # Must be odd
+      use_bbox_center_weighting: true  # Weight Gaussian at bbox center
+    
+    dclose:
+      enabled: true
+      num_masks_dev: 200         # For development/debugging (fast)
+      num_masks_final: 2000      # For final experiments (accurate, ~70s)
+      segmentation_method: "felzenszwalb"  # Options: "felzenszwalb", "slic"
+      segmentation_scales: [50, 100, 200]  # Multi-scale segmentation
+      batch_size: 32             # Process masks in batches to fit VRAM
+      similarity_metric: "confidence_drop"
+    
+    lime:
+      enabled: true
+      num_superpixels: 50
+      num_perturbations: 500
+      segmentation_method: "slic"
+      slic_compactness: 10
+      kernel_width: 0.25
+      batch_size: 32
+  
+  # Global settings
+  normalize_output: true        # All saliency maps normalized to [0, 1]
+  output_resolution: "input"    # "input" = same as input image, or specify [H, W]
+

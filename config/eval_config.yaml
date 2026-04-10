@@ -1,0 +1,48 @@
+evaluation:
+  metrics:
+    pointing_game:
+      enabled: true
+    energy_based_pg:
+      enabled: true
+    over_all:
+      enabled: true
+      # Perturbation settings for insertion/deletion
+      num_steps: 10                    # K = [10%, 20%, ..., 100%]
+      baseline_method: "blur"          # Options: "blur", "mean", "black"
+      blur_kernel_size: 51             # For blur baseline
+    sparsity:
+      enabled: true
+      method: "gini"                   # Options: "gini", "max_over_mean" (ODExAI uses max/mean)
+    computation_time:
+      enabled: true
+  
+  # Composite score weights (sum must = 1.0)
+  composite_weights:
+    pg: 0.35
+    oa: 0.45
+    sparsity: 0.20
+  
+  # Feedback loop
+  feedback:
+    enabled: true
+    threshold: 0.5                     # Trigger refinement if composite < this
+    max_iterations: 3
+    # Adjustment rules
+    conf_thresh_step: 0.05             # Increment per iteration
+    nms_thresh_step: 0.05              # Decrement per iteration
+    # Clamping ranges
+    conf_thresh_range: [0.10, 0.70]
+    nms_thresh_range: [0.30, 0.70]
+    # Early stopping: stop if improvement < this between iterations
+    min_improvement: 0.01
+
+# Experiment settings
+experiments:
+  seed: 42
+  num_runs: 3                          # Repeat with different seeds for std
+  seeds: [42, 123, 456]
+  num_images_main: 500                 # Exp 1, 2, 4
+  num_images_vlm_ablation: 200         # Exp 3
+  num_images_cross_domain: 100         # Exp 5
+  save_intermediate: true              # Save per-image results
+  log_to_wandb: false                  # Set true if using wandb

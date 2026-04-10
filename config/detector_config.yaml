@@ -1,0 +1,28 @@
+detector:
+  primary:
+    name: "yolox-s"
+    weights_url: "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_s.pth"
+    weights_path: "data/checkpoints/yolox_s.pth"
+    input_size: [640, 640]
+    num_classes: 80
+  secondary:
+    name: "fasterrcnn_resnet50_fpn_v2"
+    # Uses torchvision pretrained weights — no manual download needed
+    weights: "COCO_V1"
+    input_size: [800, 1333]  # min_size, max_size
+    num_classes: 91           # torchvision COCO includes background
+
+  # Inference settings (these are adjusted by feedback loop)
+  nms_thresh: 0.45
+  conf_thresh: 0.25
+  max_detections: 100
+  device: "cuda"
+
+  # Scene complexity thresholds
+  complexity:
+    detection_count:
+      low: 3       # <=3 detections → low
+      medium: 8    # 4-8 → medium, >8 → high
+    avg_iou_thresh: 0.3  # avg pairwise IoU > 0.3 bumps complexity up one level
+    confidence_var_thresh: 0.1  # high confidence variance → more complex
+

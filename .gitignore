@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.py,cover
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Virtual environments and local settings
+.env
+.venv/
+venv/
+
+# Experiment artifacts
+data/
+checkpoints/
+results/
+wandb/
+runs/
+tensorboard/
+
