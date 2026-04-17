@@ -22,7 +22,7 @@ from .xai_selector import XAISelector
 
 if TYPE_CHECKING:
     from .detector import Detection
-    from .evaluator import EvaluationResult
+    from .evaluator import EvalResult, EvaluationResult
     from .vlm_judge import VLMAssessment
     from .xai_methods.base import SaliencyMap
 
@@ -47,7 +47,7 @@ class PipelineResult:
     detections: list["Detection"] = field(default_factory=list)
     assessments: list["VLMAssessment"] = field(default_factory=list)
     saliency_maps: list["SaliencyMap"] = field(default_factory=list)
-    evaluation_results: list["EvaluationResult"] = field(default_factory=list)
+    evaluation_results: list["EvalResult"] = field(default_factory=list)
     composite_score: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -103,6 +103,8 @@ class AEDXAIPipeline:
 
         if self.vlm_judge is None:
             self.vlm_judge = VLMJudge(config_path=self.vlm_config_path)
+            self.vlm_judge.load_model()
+            logger.info("VLM Judge loaded and resident in VRAM.")
 
         if self.evaluator is None:
             self.evaluator = AutoEvaluator(config_path=self.eval_config_path)
@@ -144,7 +146,6 @@ class AEDXAIPipeline:
 
         try:
             image = utils.load_image(image_path)
-            self.vlm_judge.load_model()
 
             feedback_result = self.feedback_loop.run(
                 image=image,
@@ -178,9 +179,6 @@ class AEDXAIPipeline:
         except Exception:
             logger.exception("AED-XAI pipeline failed for image %s", image_path)
             raise
-        finally:
-            if self.vlm_judge is not None:
-                self.vlm_judge.unload_model()
 
     def run_batch(self, image_paths: list[str]) -> list[PipelineResult]:
         """Process a batch of images through the full AED-XAI pipeline."""

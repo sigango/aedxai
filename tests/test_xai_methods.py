@@ -194,14 +194,23 @@ def test_computation_time_logged(
     assert result.computation_time > 0
     assert isinstance(result.computation_time, float)
 
-
+@pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="10x speedup assertion requires GPU; CPU timing is unreliable"
+)
 def test_gradcam_faster_than_dclose(
     toy_image: np.ndarray,
     toy_detection: Detection,
     toy_model: ToyDetectionModel,
     toy_target_layer,
 ) -> None:
-    """GradCAM should be faster than D-CLOSE on the same input."""
+    """GradCAM should be at least 10x faster than D-CLOSE on the same input.
+
+    GradCAM = 1 forward pass + 1 backward pass.
+    D-CLOSE = N_masks perturbation forward passes (default 50-200).
+    A 10x factor is conservative; typical GPU speedup is 20-50x.
+    If this fails, check that D-CLOSE n_masks >= 50 in xai_config.yaml.
+    """
     pytest.importorskip("captum")
     pytest.importorskip("skimage")
 
@@ -219,7 +228,11 @@ def test_gradcam_faster_than_dclose(
         toy_detection,
         None,
     )
-    assert gradcam_result.computation_time < dclose_result.computation_time
+    assert gradcam_result.computation_time * 10 < dclose_result.computation_time, (
+        f"GradCAM ({gradcam_result.computation_time:.4f}s) should be >10x faster than "
+        f"D-CLOSE ({dclose_result.computation_time:.4f}s). "
+        "D-CLOSE may not be running the expected number of perturbations."
+    )
 
 
 def test_factory_function() -> None:

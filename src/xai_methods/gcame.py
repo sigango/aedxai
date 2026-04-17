@@ -113,7 +113,7 @@ class GCAMEExplainer(XAIExplainer):
                 cx = (x1 + x2) / 2.0
                 cy = (y1 + y2) / 2.0
                 box_scale = max(1.0, max(x2 - x1, y2 - y1))
-                sigma = max(1.0, float(self.config.get("gaussian_sigma", 2.0)) * box_scale)
+                sigma = max(1.0, float(self.config.get("gaussian_sigma", 0.35)) * box_scale)
                 grid_y, grid_x = np.mgrid[0 : image.shape[0], 0 : image.shape[1]]
                 gaussian = np.exp(-(((grid_x - cx) ** 2) + ((grid_y - cy) ** 2)) / (2.0 * sigma**2)).astype(
                     np.float32
