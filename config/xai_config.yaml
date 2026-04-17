@@ -13,7 +13,7 @@ xai:
       target_layers:
         yolox-s: "backbone.backbone.dark5.2"
         fasterrcnn: "backbone.body.layer4"
-      gaussian_sigma: 2.0        # Gaussian kernel sigma for saliency smoothing
+      gaussian_sigma: 0.35       # Fraction of bbox size -> sigma approx 35% of largest bbox dim
       gaussian_kernel_size: 11   # Must be odd
       use_bbox_center_weighting: true  # Weight Gaussian at bbox center
     
@@ -38,4 +38,3 @@ xai:
   # Global settings
   normalize_output: true        # All saliency maps normalized to [0, 1]
   output_resolution: "input"    # "input" = same as input image, or specify [H, W]
-

@@ -114,7 +114,7 @@ def load_image(path: str) -> np.ndarray:
     """Load an image from disk as an RGB uint8 NumPy array."""
     with Image.open(path) as image:
         rgb_image = image.convert("RGB")
-        return np.asarray(rgb_image, dtype=np.uint8)
+        return np.array(rgb_image, dtype=np.uint8, copy=True)
 
 
 def save_image(image: np.ndarray, path: str) -> None:

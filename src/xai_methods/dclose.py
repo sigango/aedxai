@@ -134,7 +134,11 @@ class DCLOSEExplainer(XAIExplainer):
         for batch_start in range(0, len(all_masks), batch_size):
             mask_batch = all_masks[batch_start : batch_start + batch_size]
             for mask in mask_batch:
-                masked_image = (image.astype(np.float32) * mask[:, :, None]).astype(np.uint8)
+                # Use 114 fill (YOLOX letterbox padding value) for masked regions
+                # rather than 0 (black), which is inconsistent with training distribution
+                fill_value = 114  # YOLOX-S letterbox pad; acceptable neutral for FRCNN too
+                masked_image = image.copy()
+                masked_image[mask == 0] = fill_value
                 output, _, meta = _forward_detector(model, masked_image, require_grad=False)
                 matched_confidence, matched_iou = _extract_matching_confidence_from_output(
                     output=output,

@@ -25,7 +25,10 @@ evaluation:
   # Feedback loop
   feedback:
     enabled: true
-    threshold: 0.5                     # Trigger refinement if composite < this
+    threshold: 0.5                     # Fallback for threshold_mode: fixed
+    threshold_mode: "percentile"       # Options: "fixed", "percentile", "learned"
+    threshold_percentile: 40           # Used when threshold_mode = "percentile"
+    # threshold_model_path: "data/checkpoints/threshold_model.pkl"  # for learned mode
     max_iterations: 3
     # Adjustment rules
     conf_thresh_step: 0.05             # Increment per iteration

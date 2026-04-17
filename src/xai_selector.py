@@ -300,7 +300,11 @@ class XAISelector:
 
     def load_model(self, path: str) -> None:
         """Load MLP weights and normalization metadata."""
-        payload = torch.load(path, map_location=self.device)
+        try:
+            payload = torch.load(path, map_location=self.device, weights_only=True)
+        except TypeError:
+            # PyTorch < 2.0 does not support weights_only argument
+            payload = torch.load(path, map_location=self.device)
         self.model = XAISelectorMLP().to(self.device)
         self.model.load_state_dict(payload["model_state_dict"])
         self.model.eval()
@@ -309,6 +313,8 @@ class XAISelector:
 
     def _normalize_feature_vector(self, features: SelectorFeatures) -> np.ndarray:
         """Normalize raw features into the 7D MLP input vector."""
+        # class_id normalized to [0, 1] via division by 79.0 (COCO has 80 classes,
+        # indices 0-79). This avoids treating class as an ordinal with arbitrary magnitude.
         class_id = np.clip(features.class_id, 0, 79) / max(self.normalization_stats["class_id_divisor"], 1.0)
         confidence = np.clip(features.confidence, 0.0, 1.0)
         relative_size_encoded = float(np.clip(features.relative_size_encoded, 0, 2))

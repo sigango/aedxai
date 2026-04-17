@@ -590,12 +590,17 @@ class VLMJudge:
 
         try:
             with torch.no_grad():
-                output_ids = self.model.generate(
-                    **inputs,
-                    max_new_tokens=max_new_tokens,
-                    temperature=self.temperature,
-                    do_sample=False,
-                )
+                generate_kwargs: dict[str, Any] = {
+                    "max_new_tokens": max_new_tokens,
+                    "do_sample": False,
+                }
+                # Only pass temperature when actually sampling; greedy decoding ignores it
+                # and some transformers versions raise ValueError when temperature=0.0 + do_sample=False
+                if self.temperature > 0.0:
+                    generate_kwargs["do_sample"] = True
+                    generate_kwargs["temperature"] = self.temperature
+                    generate_kwargs["top_p"] = self.top_p
+                output_ids = self.model.generate(**inputs, **generate_kwargs)
         except RuntimeError as exc:
             if "out of memory" not in str(exc).lower():
                 raise
@@ -607,12 +612,17 @@ class VLMJudge:
                 torch.cuda.empty_cache()
             gc.collect()
             with torch.no_grad():
-                output_ids = self.model.generate(
-                    **inputs,
-                    max_new_tokens=max_new_tokens,
-                    temperature=self.temperature,
-                    do_sample=False,
-                )
+                generate_kwargs: dict[str, Any] = {
+                    "max_new_tokens": max_new_tokens,
+                    "do_sample": False,
+                }
+                # Only pass temperature when actually sampling; greedy decoding ignores it
+                # and some transformers versions raise ValueError when temperature=0.0 + do_sample=False
+                if self.temperature > 0.0:
+                    generate_kwargs["do_sample"] = True
+                    generate_kwargs["temperature"] = self.temperature
+                    generate_kwargs["top_p"] = self.top_p
+                output_ids = self.model.generate(**inputs, **generate_kwargs)
 
         generated_ids = output_ids[:, inputs.input_ids.shape[1] :]
         response = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]

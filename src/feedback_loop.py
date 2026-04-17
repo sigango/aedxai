@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any, Mapping
 import numpy as np
 import yaml
 
+from .threshold import AdaptiveThreshold
+
 if TYPE_CHECKING:
     from .detector import Detection, DetectorWrapper
     from .evaluator import AutoEvaluator, EvalResult
@@ -90,7 +92,11 @@ class FeedbackLoop:
     def __init__(self, config_path: str | Mapping[str, Any] = "config/eval_config.yaml") -> None:
         """Load feedback config: threshold, max_iterations, steps, and clamp ranges."""
         self.config = _load_feedback_config(config_path)
-        self.threshold = float(self.config.get("threshold", 0.5))
+        # Adaptive threshold: supports "fixed", "percentile", and "learned" modes.
+        # Framed in the paper as "test-time threshold adaptation" (Section 3.4).
+        self.adaptive_threshold = AdaptiveThreshold.from_config(self.config)
+        # Keep the scalar attribute for backward compatibility in unit tests.
+        self.threshold = self.adaptive_threshold.fixed_value
         self.max_iterations = int(self.config.get("max_iterations", 3))
         self.conf_thresh_step = float(self.config.get("conf_thresh_step", 0.05))
         self.nms_thresh_step = float(self.config.get("nms_thresh_step", 0.05))
@@ -98,9 +104,22 @@ class FeedbackLoop:
         self.nms_thresh_range = tuple(float(value) for value in self.config.get("nms_thresh_range", [0.30, 0.70]))
         self.min_improvement = float(self.config.get("min_improvement", 0.01))
 
-    def should_refine(self, mean_composite: float) -> bool:
-        """Return True when the mean composite score is below the refinement threshold."""
-        return float(mean_composite) < self.threshold
+    def should_refine(
+        self,
+        mean_composite: float,
+        batch_scores: list[float] | None = None,
+    ) -> bool:
+        """Return True when the mean composite score is below the adaptive threshold.
+
+        Args:
+            mean_composite: Mean composite score for this iteration.
+            batch_scores: All per-detection scores in the current batch.
+                If None, uses [mean_composite] as a length-1 batch.
+        """
+        scores = batch_scores if batch_scores is not None else [mean_composite]
+        tau = self.adaptive_threshold.compute(scores)
+        logger.debug("should_refine: tau=%.4f  mean_composite=%.4f", tau, mean_composite)
+        return float(mean_composite) < tau
 
     def compute_new_thresholds(
         self,
@@ -249,7 +268,7 @@ class FeedbackLoop:
                 mean_composite,
             )
 
-            if not self.should_refine(mean_composite):
+            if not self.should_refine(mean_composite, batch_scores=per_detection_scores):
                 return FeedbackResult(
                     image_path=image_path,
                     iterations=iterations,

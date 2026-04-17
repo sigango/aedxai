@@ -34,7 +34,7 @@ class GCAMEConfig:
     """Configuration bundle for GCAME explanation generation."""
 
     target_layers: dict[str, str]
-    gaussian_sigma: float = 2.0
+    gaussian_sigma: float = 0.35
     gaussian_kernel_size: int = 11
     use_bbox_center_weighting: bool = True
 
@@ -46,7 +46,7 @@ class GCAMEExplainer(XAIExplainer):
         """Initialize GCAME with merged method defaults."""
         defaults = {
             "target_layers": {},
-            "gaussian_sigma": 2.0,
+            "gaussian_sigma": 0.35,
             "gaussian_kernel_size": 11,
             "use_bbox_center_weighting": True,
         }

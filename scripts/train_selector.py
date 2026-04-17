@@ -48,6 +48,7 @@ class SelectorTrainingConfig:
     max_detections_per_image: int = 5
     checkpoint_every: int = 100
     resume: bool = False
+    oracle_mode: bool = True
     sample_seed: int = 42
     methods: list[str] = field(default_factory=lambda: list(METHOD_NAMES))
 
@@ -96,7 +97,29 @@ class _FallbackAutoEvaluator:
 
 
 class SelectorTrainingRunner:
-    """Runner responsible for selector dataset creation and model fitting."""
+    """Generate oracle-labeled training data and fit the AED-XAI selector MLP.
+
+    Oracle Labeling Protocol (Section 3.3 of the paper):
+        For each detection in the training corpus, ALL four XAI methods
+        (GradCAM, G-CAME, D-CLOSE, LIME) are exhaustively evaluated.
+        The method achieving the highest composite score
+        (0.30 * PG + 0.50 * OA - 0.20 * Time, normalised per metric
+        across the dataset) is assigned as the oracle label.
+
+        The selector MLP is then trained to predict this label from
+        pre-explanation context features only:
+            - class_id (COCO category index)
+            - confidence (detector score)
+            - relative_size_encoded {0=small, 1=medium, 2=large}
+            - scene_complexity_encoded {0=simple, 1=moderate, 2=complex}
+            - num_detections (scene crowdedness)
+            - bbox_aspect_ratio (width / height)
+            - image_entropy (local patch complexity)
+
+        At inference, the selector predicts from these same features
+        in <1 ms, enabling single-shot method selection with no
+        additional forward passes.
+    """
 
     def __init__(self, config: SelectorTrainingConfig) -> None:
         self.config = config
@@ -107,6 +130,11 @@ class SelectorTrainingRunner:
     def run(self) -> dict[str, Any]:
         """Generate selector training data, then train the selector if complete."""
         set_seed(self.config.sample_seed)
+        if self.config.oracle_mode:
+            logger.info(
+                "Oracle labeling mode enabled: all configured XAI methods will be "
+                "run on every selected detection to generate offline oracle labels."
+            )
         progress_df = self._generate_training_data()
         final_df = self._finalize_training_dataframe(progress_df)
 
@@ -305,19 +333,47 @@ class SelectorTrainingRunner:
                 dataframe[f"composite_{method_name}"] = composite
                 composites.append(composite.to_numpy())
 
+            # Log per-method mean composite score for diagnostics
+            logger.info("=== PER-METHOD MEAN COMPOSITE SCORES ===")
+            for method_name in METHOD_NAMES:
+                col = f"composite_{method_name}"
+                if col in dataframe.columns:
+                    logger.info(
+                        "  %-10s  mean_composite=%.4f  std=%.4f",
+                        method_name,
+                        float(dataframe[col].mean()),
+                        float(dataframe[col].std()),
+                    )
+
             composite_matrix = np.stack(composites, axis=1)
             best_indices = np.argmax(composite_matrix, axis=1)
             dataframe["best_method_label"] = best_indices.astype(np.int64)
 
             label_counts = pd.Series(best_indices).value_counts(normalize=True).sort_index()
-            distribution = {
-                method_name: float(label_counts.get(METHOD_TO_IDX[method_name], 0.0))
-                for method_name in METHOD_NAMES
-            }
+            # --- Oracle label distribution (paper Table 3 data source) ---
+            label_counts_abs = pd.Series(best_indices).value_counts().sort_index()
             logger.info(
-                "Label distribution: %s",
-                ", ".join(f"{method}={fraction * 100:.1f}%" for method, fraction in distribution.items()),
+                "=== ORACLE LABEL DISTRIBUTION (n=%d detections) ===",
+                len(dataframe),
             )
+            for method_name in METHOD_NAMES:
+                idx = METHOD_TO_IDX[method_name]
+                count = int(label_counts_abs.get(idx, 0))
+                pct = float(label_counts.get(idx, 0.0)) * 100.0
+                logger.info("  %-10s  idx=%d  count=%5d  pct=%5.1f%%", method_name, idx, count, pct)
+
+            # Warn if any method is never selected (degenerate distribution)
+            never_selected = [
+                method_name for method_name in METHOD_NAMES
+                if float(label_counts.get(METHOD_TO_IDX[method_name], 0.0)) == 0.0
+            ]
+            if never_selected:
+                logger.warning(
+                    "Methods NEVER selected as oracle best: %s. "
+                    "Consider checking your composite weights or that these "
+                    "methods are functioning correctly.",
+                    never_selected,
+                )
         else:
             logger.warning(
                 "Only methods %s are present in progress data. "
@@ -458,6 +514,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sample-seed", type=int, default=42)
     parser.add_argument("--methods", default="gradcam,gcame,dclose,lime")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--oracle-mode",
+        action="store_true",
+        help=(
+            "Enable oracle labeling mode: runs ALL configured XAI methods "
+            "on every detection to generate offline oracle labels. "
+            "This is the default and correct training procedure. "
+            "Setting this flag makes the intent explicit and prints "
+            "additional oracle-labeling diagnostics to the log."
+        ),
+    )
     parser.add_argument("--log-level", default="INFO")
     return parser
 
@@ -483,6 +550,7 @@ def main() -> None:
         max_detections_per_image=args.max_detections_per_image,
         checkpoint_every=args.checkpoint_every,
         resume=args.resume,
+        oracle_mode=args.oracle_mode,
         sample_seed=args.sample_seed,
         methods=methods,
     )

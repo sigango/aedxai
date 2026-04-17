@@ -111,7 +111,13 @@ class LIMEExplainer(XAIExplainer):
         except ImportError as exc:
             raise ImportError("scikit-learn is required for LIMEExplainer.") from exc
 
-        distances = np.sqrt((1 - perturbation_matrix).sum(axis=1)).astype(np.float32)
+        # Cosine-like distance: fraction of superpixels turned off, normalized to [0, 1]
+        # Standard LIME uses distance from the reference (all-ones) perturbation.
+        # Normalizing by n_superpixels keeps kernel_width scale-independent.
+        n_superpixels_f = float(max(n_superpixels, 1))
+        distances = np.sqrt((1 - perturbation_matrix).sum(axis=1).astype(np.float64) / n_superpixels_f).astype(
+            np.float32
+        )
         kernel = np.exp(-(distances**2) / (kernel_width**2)).astype(np.float32)
 
         ridge = Ridge(alpha=1.0)
