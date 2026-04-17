@@ -92,8 +92,14 @@ class AEDXAIPipeline:
     def setup(self) -> None:
         """Load configuration files and initialize all pipeline components."""
         if self.detector is None:
-            self.detector = DetectorWrapper(config_path=self.detector_config_path)
+            detector_cfg = self._load_yaml(self.detector_config_path)
+            model_name = str(detector_cfg.get("primary", {}).get("name", "yolox-s"))
+            self.detector = DetectorWrapper(
+                model_name=model_name,
+                config_path=self.detector_config_path,
+            )
             self.detector.load_model()
+            logger.info("Loaded detector model: %s", model_name)
 
         if self.vlm_judge is None:
             self.vlm_judge = VLMJudge(config_path=self.vlm_config_path)
