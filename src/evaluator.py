@@ -132,13 +132,14 @@ class AutoEvaluator:
         """Load metric configurations and composite-score weights."""
         self.config = _load_eval_config(config_path)
         self.metrics_config = dict(self.config.get("metrics", {}))
+        _equal_weight = round(1.0 / 3.0, 6)  # 0.333333
         self.composite_weights = dict(
             self.config.get(
                 "composite_weights",
                 {
-                    "pg": 0.35,
-                    "oa": 0.45,
-                    "sparsity": 0.20,
+                    "pg": _equal_weight,
+                    "oa": _equal_weight,
+                    "sparsity": _equal_weight,
                 },
             )
         )
@@ -280,11 +281,12 @@ class AutoEvaluator:
         oa = float(source.get("oa", 0.0))
         oa_norm = float(np.clip((oa + 0.5) / 1.5, 0.0, 1.0))
         sparsity = float(np.clip(float(source.get("sparsity", 0.0)), 0.0, 1.0))
+        equal_weight = round(1.0 / 3.0, 6)
 
         composite = (
-            float(active_weights.get("pg", 0.35)) * pg
-            + float(active_weights.get("oa", 0.45)) * oa_norm
-            + float(active_weights.get("sparsity", 0.20)) * sparsity
+            float(active_weights.get("pg", equal_weight)) * pg
+            + float(active_weights.get("oa", equal_weight)) * oa_norm
+            + float(active_weights.get("sparsity", equal_weight)) * sparsity
         )
         return float(np.clip(composite, 0.0, 1.0))
 

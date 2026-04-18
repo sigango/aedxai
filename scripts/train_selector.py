@@ -103,7 +103,7 @@ class SelectorTrainingRunner:
         For each detection in the training corpus, ALL four XAI methods
         (GradCAM, G-CAME, D-CLOSE, LIME) are exhaustively evaluated.
         The method achieving the highest composite score
-        (0.30 * PG + 0.50 * OA - 0.20 * Time, normalised per metric
+        ((PG + OA + Sparsity) / 3, normalised per metric
         across the dataset) is assigned as the oracle label.
 
         The selector MLP is then trained to predict this label from
@@ -227,6 +227,7 @@ class SelectorTrainingRunner:
 
                     feature_row[f"pg_{method_name}"] = float(metrics["pg"])
                     feature_row[f"oa_{method_name}"] = float(metrics["oa"])
+                    feature_row[f"sparsity_{method_name}"] = float(metrics["sparsity"])
                     feature_row[f"time_{method_name}"] = float(metrics["computation_time"])
 
                 rows.append(feature_row)
@@ -298,7 +299,7 @@ class SelectorTrainingRunner:
         if not present_columns:
             return dataframe
 
-        for metric_name in ("pg", "oa", "time"):
+        for metric_name in ("pg", "oa", "sparsity"):
             metric_columns = [f"{metric_name}_{method_name}" for method_name in METHOD_NAMES if f"{metric_name}_{method_name}" in dataframe.columns]
             values = dataframe[metric_columns].to_numpy(dtype=np.float32)
             metric_min = float(np.nanmin(values))
@@ -317,7 +318,7 @@ class SelectorTrainingRunner:
                 for column in (
                     f"pg_norm_{method_name}",
                     f"oa_norm_{method_name}",
-                    f"time_norm_{method_name}",
+                    f"sparsity_norm_{method_name}",
                 )
             )
         ]
@@ -326,10 +327,10 @@ class SelectorTrainingRunner:
             composites = []
             for method_name in METHOD_NAMES:
                 composite = (
-                    0.30 * dataframe[f"pg_norm_{method_name}"]
-                    + 0.50 * dataframe[f"oa_norm_{method_name}"]
-                    - 0.20 * dataframe[f"time_norm_{method_name}"]
-                )
+                    dataframe[f"pg_norm_{method_name}"]
+                    + dataframe[f"oa_norm_{method_name}"]
+                    + dataframe[f"sparsity_norm_{method_name}"]
+                ) / 3.0
                 dataframe[f"composite_{method_name}"] = composite
                 composites.append(composite.to_numpy())
 
@@ -384,6 +385,7 @@ class SelectorTrainingRunner:
         if "best_method_label" in dataframe.columns:
             final_columns = FEATURE_COLUMNS + [f"pg_{m}" for m in METHOD_NAMES if f"pg_{m}" in dataframe.columns]
             final_columns += [f"oa_{m}" for m in METHOD_NAMES if f"oa_{m}" in dataframe.columns]
+            final_columns += [f"sparsity_{m}" for m in METHOD_NAMES if f"sparsity_{m}" in dataframe.columns]
             final_columns.append("best_method_label")
             return dataframe[final_columns]
 

@@ -18,9 +18,9 @@ evaluation:
   
   # Composite score weights (sum must = 1.0)
   composite_weights:
-    pg: 0.35
-    oa: 0.45
-    sparsity: 0.20
+    pg: 0.333333      # Equal weight — uniform prior over metric importance
+    oa: 0.333333      # Equal weight — see paper Section 3.2 and Appendix A
+    sparsity: 0.333333
   
   # Feedback loop
   feedback:
