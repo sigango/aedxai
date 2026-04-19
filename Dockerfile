@@ -19,10 +19,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /workspace/aed-xai
 
 COPY requirements.txt /workspace/aed-xai/requirements.txt
+COPY requirements-yolox.txt /workspace/aed-xai/requirements-yolox.txt
 
 RUN python3.10 -m pip install --upgrade pip setuptools wheel && \
     python3.10 -m pip install -r requirements.txt && \
-    python3.10 -m pip install git+https://github.com/Megvii-BaseDetection/YOLOX.git
+    python3.10 -m pip install --no-build-isolation -r requirements-yolox.txt
 
 COPY . /workspace/aed-xai
 

@@ -60,7 +60,7 @@ python3.10 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
-pip install git+https://github.com/Megvii-BaseDetection/YOLOX.git
+pip install --no-build-isolation -r requirements-yolox.txt
 pip install -e .
 ```
 

@@ -5,8 +5,8 @@ numpy>=1.24
 scipy>=1.11
 
 # Object Detection
-# YOLOX via official repo (not mmdet — simpler deps)
-# Install separately: pip install git+https://github.com/Megvii-BaseDetection/YOLOX.git
+# YOLOX via official repo (not mmdet - simpler deps)
+# Install after this file: pip install --no-build-isolation -r requirements-yolox.txt
 pycocotools>=2.0
 
 # VLM
@@ -35,7 +35,10 @@ tqdm>=4.66
 wandb>=0.16           # Optional: experiment tracking
 tensorboard>=2.14     # Optional: alternative to wandb
 
+# Packaging
+setuptools>=68
+wheel>=0.41
+
 # Testing
 pytest>=7.4
 pytest-cov>=4.1
-

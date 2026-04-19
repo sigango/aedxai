@@ -1,0 +1,3 @@
+# Install with: pip install --no-build-isolation -r requirements-yolox.txt
+# Run after requirements.txt so YOLOX can import torch during its build.
+git+https://github.com/Megvii-BaseDetection/YOLOX.git
