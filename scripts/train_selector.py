@@ -58,14 +58,20 @@ class _FallbackAutoEvaluator:
 
     def evaluate_all(
         self,
-        saliency: Any,
-        bbox: list[int],
-        model: Any,
-        image: np.ndarray,
-        detection: Detection,
+        saliency_map: Any = None,
+        bbox: list[int] | None = None,
+        model: Any = None,
+        image: np.ndarray | None = None,
+        detection: Detection | None = None,
+        **kwargs: Any,
     ) -> dict[str, float]:
         del model, image, detection
-        saliency_map = getattr(saliency, "map", saliency)
+        if saliency_map is None:
+            saliency_map = kwargs.get("saliency")
+        if saliency_map is None or bbox is None:
+            raise ValueError("saliency_map and bbox are required")
+        saliency_input = saliency_map
+        saliency_map = getattr(saliency_input, "map", saliency_input)
         saliency_map = np.asarray(saliency_map, dtype=np.float32)
         x1, y1, x2, y2 = [int(value) for value in bbox]
         x1 = max(0, x1)
@@ -85,7 +91,7 @@ class _FallbackAutoEvaluator:
         oa = float(np.clip(0.6 * ebpg + 0.4 * (bbox_mean / full_mean), 0.0, 1.0))
         sparse_fraction = float(np.mean(saliency_map > saliency_map.mean()))
         sparsity = float(np.clip(1.0 - sparse_fraction, 0.0, 1.0))
-        computation_time = float(getattr(saliency, "computation_time", 0.0))
+        computation_time = float(getattr(saliency_input, "computation_time", 0.0))
 
         return {
             "pg": pg,
@@ -218,7 +224,7 @@ class SelectorTrainingRunner:
                         target_layer=target_layer if method_name in {"gradcam", "gcame"} else None,
                     )
                     metrics = evaluator.evaluate_all(
-                        saliency=saliency,
+                        saliency_map=saliency,
                         bbox=detection.bbox,
                         model=model,
                         image=image,
@@ -492,7 +498,7 @@ class SelectorTrainingRunner:
     def _required_metric_columns() -> list[str]:
         """Return the required per-method metric columns for final labeling."""
         columns = []
-        for metric_name in ("pg", "oa", "time"):
+        for metric_name in ("pg", "oa", "sparsity", "time"):
             for method_name in METHOD_NAMES:
                 columns.append(f"{metric_name}_{method_name}")
         return columns

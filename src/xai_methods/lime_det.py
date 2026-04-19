@@ -90,12 +90,17 @@ class LIMEExplainer(XAIExplainer):
         perturbation_matrix[0] = 1
 
         predictions: list[float] = []
+        # Fill value 114 matches YOLOX letterbox padding (and is a neutral gray for FRCNN),
+        # keeping masked regions in-distribution. Black (0) used previously is out-of-distribution
+        # for YOLOX and biases the detector's confidence drop.
+        fill_value = 114
         for batch_start in range(0, num_perturbations, batch_size):
             batch = perturbation_matrix[batch_start : batch_start + batch_size]
             for row in batch:
                 selected_superpixels = np.where(row == 1)[0]
-                mask = np.isin(segments, selected_superpixels).astype(np.float32)
-                masked_image = (image.astype(np.float32) * mask[:, :, None]).astype(np.uint8)
+                mask = np.isin(segments, selected_superpixels)
+                masked_image = image.copy()
+                masked_image[~mask] = fill_value
 
                 output, _, meta = _forward_detector(model, masked_image, require_grad=False)
                 matched_confidence, _ = _extract_matching_confidence_from_output(

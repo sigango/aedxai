@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import torch
 import yaml
 
 from . import utils
@@ -129,11 +128,14 @@ class AEDXAIPipeline:
                     continue
                 self.xai_methods[method_name] = get_explainer(method_name, method_options)
 
+        import torch
+
         if torch.cuda.is_available():
             vram_gb = torch.cuda.memory_allocated() / 1e9
             logger.info("AED-XAI setup complete. CUDA memory allocated: %.2f GB", vram_gb)
         else:
             logger.info("AED-XAI setup complete on CPU.")
+        logger.info("Initialized components: %s", self.initialized_components)
 
     def run_on_image(self, image_path: str) -> PipelineResult:
         """Process one image through the full AED-XAI pipeline."""
@@ -167,7 +169,7 @@ class AEDXAIPipeline:
             return PipelineResult(
                 image_path=image_path,
                 detections=feedback_result.final_detections,
-                assessments=[],
+                assessments=list(feedback_result.final_assessments),
                 saliency_maps=feedback_result.final_saliency_maps,
                 evaluation_results=final_eval_results,
                 composite_score=mean_composite,
@@ -220,8 +222,37 @@ class AEDXAIPipeline:
         self.xai_methods = {}
 
         gc.collect()
+        import torch
+
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+    def reset(self) -> None:
+        """Reset all pipeline components to uninitialized state.
+
+        Call this before retrying setup() after a partial initialization
+        failure (e.g. VLM OOM mid-setup).
+        """
+        self.shutdown()
+        logger.info("Pipeline reset to uninitialized state.")
+
+    @property
+    def initialized_components(self) -> list[str]:
+        """Names of components that have been successfully initialized."""
+        components: list[str] = []
+        if self.detector is not None:
+            components.append("detector")
+        if self.vlm_judge is not None:
+            components.append("vlm_judge")
+        if self.evaluator is not None:
+            components.append("evaluator")
+        if self.feedback_loop is not None:
+            components.append("feedback_loop")
+        if self.xai_selector is not None:
+            components.append("xai_selector")
+        if self.xai_methods:
+            components.append(f"xai_methods({list(self.xai_methods.keys())})")
+        return components
 
     @staticmethod
     def _resolve_path(path: str) -> Path:

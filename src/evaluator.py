@@ -279,7 +279,8 @@ class AutoEvaluator:
 
         pg = float(np.clip(float(source.get("pg", 0.0)), 0.0, 1.0))
         oa = float(source.get("oa", 0.0))
-        oa_norm = float(np.clip((oa + 0.5) / 1.5, 0.0, 1.0))
+        # OA = insertion_AUC - deletion_AUC ∈ [-1, 1]. Linear map to [0, 1]: (oa + 1) / 2.
+        oa_norm = float(np.clip((oa + 1.0) / 2.0, 0.0, 1.0))
         sparsity = float(np.clip(float(source.get("sparsity", 0.0)), 0.0, 1.0))
         equal_weight = round(1.0 / 3.0, 6)
 

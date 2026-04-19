@@ -103,7 +103,12 @@ class DCLOSEExplainer(XAIExplainer):
 
         segmentation_method = str(self.config.get("segmentation_method", "felzenszwalb")).lower()
         segmentation_scales = list(self.config.get("segmentation_scales", [50, 100, 200]))
-        num_masks = int(self.config.get("num_masks_dev", 200))
+        # use_final_masks=true activates num_masks_final (paper experiments ~70s/image);
+        # default false keeps the fast num_masks_dev budget for development.
+        if bool(self.config.get("use_final_masks", False)):
+            num_masks = int(self.config.get("num_masks_final", 2000))
+        else:
+            num_masks = int(self.config.get("num_masks_dev", 200))
         per_scale_masks = max(1, num_masks // max(1, len(segmentation_scales)))
         batch_size = max(1, int(self.config.get("batch_size", 32)))
         rng = np.random.default_rng(0)

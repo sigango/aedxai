@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
 
@@ -47,6 +47,7 @@ class FeedbackResult:
     final_eval_results: list["EvalResult"]
     converged: bool
     total_time: float
+    final_assessments: list[Any] = field(default_factory=list)
 
 
 FeedbackOutcome = FeedbackResult
@@ -139,6 +140,7 @@ class FeedbackLoop:
         new_nms = float(current_nms)
         new_conf = float(current_conf)
 
+        # Strict <: boundary values (mean_pg==0.5 / mean_oa==0.3) are treated as "acceptable".
         localization_low = mean_pg < 0.5
         faithfulness_low = mean_oa < 0.3
 
@@ -147,6 +149,7 @@ class FeedbackLoop:
         if faithfulness_low:
             new_conf += self.conf_thresh_step
         if not localization_low and not faithfulness_low:
+            # Both metrics OK — nudge conf up slightly to prune marginal false positives.
             new_conf += self.conf_thresh_step * 0.5
 
         new_nms = float(np.clip(new_nms, self.nms_thresh_range[0], self.nms_thresh_range[1]))
@@ -170,7 +173,7 @@ class FeedbackLoop:
         conf_thresh = float(getattr(detector, "default_conf_thresh", detector.config.get("conf_thresh", 0.25)))
         iterations: list[FeedbackIteration] = []
 
-        assessments: list[Any] | None = None
+        assessments: list[Any] = []
         scene_complexity = "medium"
         prev_composite = -1.0
 
@@ -191,10 +194,11 @@ class FeedbackLoop:
                     final_eval_results=[],
                     converged=False,
                     total_time=float(time.time() - t_start),
+                    final_assessments=list(assessments),
                 )
 
             if iteration_index == 0:
-                assessments = vlm_judge.assess_detections(image, detections)
+                assessments = list(vlm_judge.assess_detections(image, detections) or [])
                 if assessments:
                     scene_complexity = str(getattr(assessments[0], "scene_complexity", "medium"))
                 else:
@@ -277,8 +281,11 @@ class FeedbackLoop:
                     final_eval_results=eval_results,
                     converged=True,
                     total_time=float(time.time() - t_start),
+                    final_assessments=list(assessments),
                 )
 
+            # prev_composite is initialized to -1.0 (sentinel). On iteration 0, improvement = inf,
+            # so we always proceed to iteration 1. If the sentinel changes, update the guard below.
             improvement = mean_composite - prev_composite if prev_composite >= 0.0 else float("inf")
             if iteration_index > 0 and improvement < self.min_improvement:
                 logger.info(
@@ -294,6 +301,7 @@ class FeedbackLoop:
                     final_eval_results=eval_results,
                     converged=False,
                     total_time=float(time.time() - t_start),
+                    final_assessments=list(assessments),
                 )
 
             prev_composite = mean_composite
@@ -311,6 +319,7 @@ class FeedbackLoop:
             final_eval_results=last_eval_results,
             converged=False,
             total_time=float(time.time() - t_start),
+            final_assessments=list(assessments),
         )
 
 

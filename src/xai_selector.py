@@ -41,6 +41,12 @@ FEATURE_COLUMNS = [
 
 TRAINING_OUTPUT_PATH = "data/checkpoints/xai_selector.pth"
 
+_EXPECTED_NORM_KEYS: dict[str, tuple[float, float]] = {
+    "class_id_divisor": (1.0, 100.0),
+    "num_detections_divisor": (1.0, 200.0),
+    "image_entropy_divisor": (1.0, 20.0),
+}
+
 
 @dataclass(slots=True)
 class SelectorFeatures:
@@ -150,13 +156,35 @@ class XAISelector:
         self.is_trained = False
         self.model_path = str(model_path) if model_path is not None else TRAINING_OUTPUT_PATH
         self.normalization_stats = {
-            "class_id_divisor": 79.0,
-            "num_detections_divisor": 50.0,
-            "image_entropy_divisor": 8.0,
+            "class_id_divisor": 79.0,        # COCO: 80 classes, indices 0-79
+            "num_detections_divisor": 50.0,  # Clip at 50 crowded detections
+            "image_entropy_divisor": 8.0,    # Max Shannon entropy for 256-bin histogram
         }
 
         if model_path and Path(model_path).exists():
-            self.load_model(model_path)
+            try:
+                self.load_model(model_path)
+                if not self.is_trained:
+                    logger.warning(
+                        "Selector checkpoint '%s' loaded but is_trained=False. "
+                        "Falling back to rule-based selection.",
+                        model_path,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to load XAI selector checkpoint '%s': %s. "
+                    "Falling back to rule-based selection. "
+                    "Re-train with: python scripts/train_selector.py",
+                    model_path,
+                    exc,
+                )
+                self.is_trained = False
+        elif model_path and not Path(model_path).exists():
+            logger.info(
+                "XAI selector checkpoint not found at '%s'. "
+                "Using rule-based fallback. Train with: python scripts/train_selector.py",
+                model_path,
+            )
 
     def extract_features(
         self,
@@ -309,23 +337,35 @@ class XAISelector:
         self.model.load_state_dict(payload["model_state_dict"])
         self.model.eval()
         self.normalization_stats = dict(payload.get("normalization_stats", self.normalization_stats))
+        self._validate_normalization_stats()
         self.is_trained = True
+
+    def _validate_normalization_stats(self) -> None:
+        """Ensure normalization divisors are sane before they reach division."""
+        for key, (lo, hi) in _EXPECTED_NORM_KEYS.items():
+            value = self.normalization_stats.get(key)
+            if value is None:
+                raise ValueError(
+                    f"normalization_stats missing key '{key}'. "
+                    "Checkpoint may be corrupted or from an incompatible version."
+                )
+            if not (lo <= float(value) <= hi):
+                raise ValueError(
+                    f"normalization_stats['{key}'] = {value} is outside expected "
+                    f"range [{lo}, {hi}]. Checkpoint may be corrupted."
+                )
 
     def _normalize_feature_vector(self, features: SelectorFeatures) -> np.ndarray:
         """Normalize raw features into the 7D MLP input vector."""
-        # class_id normalized to [0, 1] via division by 79.0 (COCO has 80 classes,
-        # indices 0-79). This avoids treating class as an ordinal with arbitrary magnitude.
-        class_id = np.clip(features.class_id, 0, 79) / max(self.normalization_stats["class_id_divisor"], 1.0)
+        # Divisors are validated in _validate_normalization_stats; no silent fallback here
+        # so a corrupted checkpoint surfaces as a ValueError at load time.
+        class_id = np.clip(features.class_id, 0, 79) / self.normalization_stats["class_id_divisor"]
         confidence = np.clip(features.confidence, 0.0, 1.0)
         relative_size_encoded = float(np.clip(features.relative_size_encoded, 0, 2))
         scene_complexity_encoded = float(np.clip(features.scene_complexity_encoded, 0, 2))
-        num_detections = np.clip(features.num_detections, 0, 50) / max(
-            self.normalization_stats["num_detections_divisor"], 1.0
-        )
+        num_detections = np.clip(features.num_detections, 0, 50) / self.normalization_stats["num_detections_divisor"]
         bbox_aspect_ratio = float(np.clip(features.bbox_aspect_ratio, 0.0, 10.0))
-        image_entropy = np.clip(features.image_entropy, 0.0, 8.0) / max(
-            self.normalization_stats["image_entropy_divisor"], 1.0
-        )
+        image_entropy = np.clip(features.image_entropy, 0.0, 8.0) / self.normalization_stats["image_entropy_divisor"]
 
         return np.asarray(
             [
