@@ -16,6 +16,7 @@ from .base import (
     _finalize_saliency_map,
     _forward_detector_from_tensor,
     _prepare_model_input,
+    _renormalize_in_bbox,
     _require_torch,
 )
 
@@ -68,7 +69,12 @@ class GradCAMExplainer(XAIExplainer):
     """Standard Grad-CAM explanation for object detection."""
 
     def __init__(self, config: Mapping[str, Any]) -> None:
-        defaults = {"target_layers": {}, "upsample_mode": "bilinear"}
+        defaults = {
+            "target_layers": {},
+            "upsample_mode": "bilinear",
+            "renormalize_in_bbox": True,
+            "zero_outside_bbox": False,
+        }
         defaults.update(dict(config))
         super().__init__(defaults)
 
@@ -104,6 +110,12 @@ class GradCAMExplainer(XAIExplainer):
                 cam = cam.mean(axis=0)
             cam = np.maximum(cam, 0.0)
             cam = _finalize_saliency_map(cam, image.shape[:2], detection)
+            if bool(self.config.get("renormalize_in_bbox", True)):
+                cam = _renormalize_in_bbox(
+                    cam,
+                    detection.bbox,
+                    zero_outside=bool(self.config.get("zero_outside_bbox", False)),
+                )
         except Exception as exc:
             logger.warning(
                 "GradCAM failed for detection %s; falling back to bbox prior. Error: %s",

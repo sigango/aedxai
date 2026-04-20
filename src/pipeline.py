@@ -49,6 +49,7 @@ class PipelineResult:
     evaluation_results: list["EvalResult"] = field(default_factory=list)
     composite_score: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    selector_reasoning: dict[int, dict[str, Any]] = field(default_factory=dict)
 
 
 class AEDXAIPipeline:
@@ -60,12 +61,20 @@ class AEDXAIPipeline:
         vlm_config_path: str,
         xai_config_path: str,
         eval_config_path: str,
+        detector_model_name: str | None = None,
     ) -> None:
-        """Initialize the pipeline from its configuration file paths."""
+        """Initialize the pipeline from its configuration file paths.
+
+        Args:
+            detector_model_name: Override which detector family to load. Supported values:
+                "yolox-s", "fasterrcnn_resnet50_fpn_v2". If None, uses
+                detector_config.yaml:detector.primary.name.
+        """
         self.detector_config_path = str(detector_config_path)
         self.vlm_config_path = str(vlm_config_path)
         self.xai_config_path = str(xai_config_path)
         self.eval_config_path = str(eval_config_path)
+        self.detector_model_name = detector_model_name
 
         self.detector: DetectorWrapper | None = None
         self.vlm_judge: VLMJudge | None = None
@@ -91,8 +100,12 @@ class AEDXAIPipeline:
     def setup(self) -> None:
         """Load configuration files and initialize all pipeline components."""
         if self.detector is None:
-            detector_cfg = self._load_yaml(self.detector_config_path)
-            model_name = str(detector_cfg.get("primary", {}).get("name", "yolox-s"))
+            detector_cfg_raw = self._load_yaml(self.detector_config_path)
+            detector_cfg = dict(detector_cfg_raw.get("detector", detector_cfg_raw))
+            model_name = str(
+                self.detector_model_name
+                or detector_cfg.get("primary", {}).get("name", "yolox-s")
+            )
             self.detector = DetectorWrapper(
                 model_name=model_name,
                 config_path=self.detector_config_path,
@@ -112,7 +125,13 @@ class AEDXAIPipeline:
             self.feedback_loop = FeedbackLoop(config_path=self.eval_config_path)
 
         if self.xai_selector is None:
-            selector_checkpoint = self._resolve_path("data/checkpoints/xai_selector.pth")
+            # Selector features include detector-specific signals (bbox stats, scene complexity),
+            # so each detector family needs its own trained checkpoint. Prefer the
+            # per-detector file; fall back to the legacy single-file path.
+            detector_name = self.detector.model_name
+            per_detector = self._resolve_path(f"data/checkpoints/xai_selector_{detector_name}.pth")
+            legacy = self._resolve_path("data/checkpoints/xai_selector.pth")
+            selector_checkpoint = per_detector if per_detector.exists() else legacy
             if selector_checkpoint.exists():
                 self.xai_selector = XAISelector(model_path=str(selector_checkpoint))
                 logger.info("Loaded XAI selector checkpoint from %s", selector_checkpoint)
@@ -177,6 +196,7 @@ class AEDXAIPipeline:
                     "iterations": len(feedback_result.iterations),
                     "converged": feedback_result.converged,
                 },
+                selector_reasoning=dict(feedback_result.final_selector_reasoning),
             )
         except Exception:
             logger.exception("AED-XAI pipeline failed for image %s", image_path)

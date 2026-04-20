@@ -7,6 +7,12 @@ xai:
         yolox-s: "backbone.backbone.dark5.2"     # Last CSP block — verify with model.named_modules()
         fasterrcnn: "backbone.body.layer4"         # ResNet-50 last block
       upsample_mode: "bilinear"
+      # Jacob Gil's "renormalize CAM inside every bounding box" trick:
+      # rescales in-bbox values to span [0, 1] so each object's saliency is
+      # locally visible. Soft by default — outside kept on [0, 1] scale so EBPG
+      # still carries signal. Set zero_outside_bbox: true to visualize-only.
+      renormalize_in_bbox: true
+      zero_outside_bbox: false
     
     gcame:
       enabled: true

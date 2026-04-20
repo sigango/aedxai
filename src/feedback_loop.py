@@ -48,6 +48,7 @@ class FeedbackResult:
     converged: bool
     total_time: float
     final_assessments: list[Any] = field(default_factory=list)
+    final_selector_reasoning: dict[int, dict[str, Any]] = field(default_factory=dict)
 
 
 FeedbackOutcome = FeedbackResult
@@ -134,14 +135,16 @@ class FeedbackLoop:
             new_conf = min(self.conf_thresh_range[1], current_conf + self.conf_thresh_step)
             return float(new_nms), float(new_conf)
 
-        mean_pg = float(np.mean([result.pg for result in eval_results]))
+        mean_ebpg = float(np.mean([result.ebpg for result in eval_results]))
         mean_oa = float(np.mean([result.oa for result in eval_results]))
 
         new_nms = float(current_nms)
         new_conf = float(current_conf)
 
-        # Strict <: boundary values (mean_pg==0.5 / mean_oa==0.3) are treated as "acceptable".
-        localization_low = mean_pg < 0.5
+        # Strict <: boundary values (mean_ebpg==0.3 / mean_oa==0.3) are treated as "acceptable".
+        # EBPG is the energy-based pointing game: fraction of saliency mass inside bbox.
+        # ~0.3 threshold matches published baselines (D-CLOSE, G-CAME) on COCO.
+        localization_low = mean_ebpg < 0.3
         faithfulness_low = mean_oa < 0.3
 
         if localization_low:
@@ -180,6 +183,7 @@ class FeedbackLoop:
         last_detections: list["Detection"] = []
         last_saliency_maps: list["SaliencyMap"] = []
         last_eval_results: list["EvalResult"] = []
+        last_selector_reasoning: dict[int, dict[str, Any]] = {}
 
         for iteration_index in range(self.max_iterations):
             detections = detector.detect(image, nms_thresh=nms_thresh, conf_thresh=conf_thresh)
@@ -195,6 +199,7 @@ class FeedbackLoop:
                     converged=False,
                     total_time=float(time.time() - t_start),
                     final_assessments=list(assessments),
+                    final_selector_reasoning={},
                 )
 
             if iteration_index == 0:
@@ -208,8 +213,9 @@ class FeedbackLoop:
                         else "medium"
                     )
 
-            selected_methods = {
-                detection.detection_id: xai_selector.predict(
+            selector_reasoning = {
+                detection.detection_id: self._predict_selector_reasoning(
+                    xai_selector=xai_selector,
                     detection=detection,
                     scene_complexity=scene_complexity,
                     num_detections=len(detections),
@@ -217,6 +223,11 @@ class FeedbackLoop:
                 )
                 for detection in detections
             }
+            selected_methods = {
+                detection_id: reasoning["method"]
+                for detection_id, reasoning in selector_reasoning.items()
+            }
+            last_selector_reasoning = selector_reasoning
 
             needs_target_layer = any(
                 selected_methods[detection.detection_id] in {"gradcam", "gcame"} for detection in detections
@@ -282,6 +293,7 @@ class FeedbackLoop:
                     converged=True,
                     total_time=float(time.time() - t_start),
                     final_assessments=list(assessments),
+                    final_selector_reasoning=dict(last_selector_reasoning),
                 )
 
             # prev_composite is initialized to -1.0 (sentinel). On iteration 0, improvement = inf,
@@ -302,6 +314,7 @@ class FeedbackLoop:
                     converged=False,
                     total_time=float(time.time() - t_start),
                     final_assessments=list(assessments),
+                    final_selector_reasoning=dict(last_selector_reasoning),
                 )
 
             prev_composite = mean_composite
@@ -320,7 +333,41 @@ class FeedbackLoop:
             converged=False,
             total_time=float(time.time() - t_start),
             final_assessments=list(assessments),
+            final_selector_reasoning=dict(last_selector_reasoning),
         )
+
+    @staticmethod
+    def _predict_selector_reasoning(
+        xai_selector: "XAISelector",
+        detection: "Detection",
+        scene_complexity: str,
+        num_detections: int,
+        image: np.ndarray,
+    ) -> dict[str, Any]:
+        """Return selector reasoning, falling back to legacy predict() APIs."""
+        if hasattr(xai_selector, "predict_reasoning"):
+            return dict(
+                xai_selector.predict_reasoning(
+                    detection=detection,
+                    scene_complexity=scene_complexity,
+                    num_detections=num_detections,
+                    image=image,
+                )
+            )
+
+        method_name = xai_selector.predict(
+            detection=detection,
+            scene_complexity=scene_complexity,
+            num_detections=num_detections,
+            image=image,
+        )
+        return {
+            "method": method_name,
+            "source": "predict",
+            "probabilities": None,
+            "confidence": 1.0,
+            "rule_trigger": None,
+        }
 
 
 __all__ = ["FeedbackIteration", "FeedbackLoop", "FeedbackOutcome", "FeedbackResult"]

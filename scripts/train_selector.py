@@ -43,6 +43,7 @@ class SelectorTrainingConfig:
     output_csv: str = "results/xai_selector_training_data.csv"
     progress_csv: str = "results/xai_selector_training_progress.csv"
     output_model_path: str = "data/checkpoints/xai_selector.pth"
+    detector_model: str = "yolox-s"
     target_detections: int = 2000
     max_images: int = 400
     max_detections_per_image: int = 5
@@ -170,7 +171,7 @@ class SelectorTrainingRunner:
         processed_keys = set(progress_df.get("sample_key", pd.Series(dtype=str)).astype(str).tolist())
         rows = progress_df.to_dict("records")
 
-        detector = DetectorWrapper("yolox-s", config_path=self.config.detector_config)
+        detector = DetectorWrapper(self.config.detector_model, config_path=self.config.detector_config)
         detector.load_model()
         model = detector.get_model()
         target_layer = detector.get_target_layer()
@@ -232,6 +233,7 @@ class SelectorTrainingRunner:
                     )
 
                     feature_row[f"pg_{method_name}"] = float(metrics["pg"])
+                    feature_row[f"ebpg_{method_name}"] = float(metrics["ebpg"])
                     feature_row[f"oa_{method_name}"] = float(metrics["oa"])
                     feature_row[f"sparsity_{method_name}"] = float(metrics["sparsity"])
                     feature_row[f"time_{method_name}"] = float(metrics["computation_time"])
@@ -305,8 +307,12 @@ class SelectorTrainingRunner:
         if not present_columns:
             return dataframe
 
-        for metric_name in ("pg", "oa", "sparsity"):
+        # Oracle composite uses EBPG (continuous plausibility) instead of PG (binary);
+        # matches the runtime composite_score in src/evaluator.py.
+        for metric_name in ("ebpg", "oa", "sparsity"):
             metric_columns = [f"{metric_name}_{method_name}" for method_name in METHOD_NAMES if f"{metric_name}_{method_name}" in dataframe.columns]
+            if not metric_columns:
+                continue
             values = dataframe[metric_columns].to_numpy(dtype=np.float32)
             metric_min = float(np.nanmin(values))
             metric_max = float(np.nanmax(values))
@@ -322,7 +328,7 @@ class SelectorTrainingRunner:
             if all(
                 column in dataframe.columns
                 for column in (
-                    f"pg_norm_{method_name}",
+                    f"ebpg_norm_{method_name}",
                     f"oa_norm_{method_name}",
                     f"sparsity_norm_{method_name}",
                 )
@@ -333,7 +339,7 @@ class SelectorTrainingRunner:
             composites = []
             for method_name in METHOD_NAMES:
                 composite = (
-                    dataframe[f"pg_norm_{method_name}"]
+                    dataframe[f"ebpg_norm_{method_name}"]
                     + dataframe[f"oa_norm_{method_name}"]
                     + dataframe[f"sparsity_norm_{method_name}"]
                 ) / 3.0
@@ -389,9 +395,13 @@ class SelectorTrainingRunner:
             )
 
         if "best_method_label" in dataframe.columns:
-            final_columns = FEATURE_COLUMNS + [f"pg_{m}" for m in METHOD_NAMES if f"pg_{m}" in dataframe.columns]
-            final_columns += [f"oa_{m}" for m in METHOD_NAMES if f"oa_{m}" in dataframe.columns]
-            final_columns += [f"sparsity_{m}" for m in METHOD_NAMES if f"sparsity_{m}" in dataframe.columns]
+            final_columns = list(FEATURE_COLUMNS)
+            for metric_name in ("pg", "ebpg", "oa", "sparsity", "time", "composite"):
+                final_columns += [
+                    f"{metric_name}_{method_name}"
+                    for method_name in METHOD_NAMES
+                    if f"{metric_name}_{method_name}" in dataframe.columns
+                ]
             final_columns.append("best_method_label")
             return dataframe[final_columns]
 
@@ -498,7 +508,7 @@ class SelectorTrainingRunner:
     def _required_metric_columns() -> list[str]:
         """Return the required per-method metric columns for final labeling."""
         columns = []
-        for metric_name in ("pg", "oa", "sparsity", "time"):
+        for metric_name in ("ebpg", "oa", "sparsity", "time"):
             for method_name in METHOD_NAMES:
                 columns.append(f"{metric_name}_{method_name}")
         return columns
@@ -514,7 +524,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--images-dir", default="data/coco/val2017")
     parser.add_argument("--output-csv", default="results/xai_selector_training_data.csv")
     parser.add_argument("--progress-csv", default="results/xai_selector_training_progress.csv")
-    parser.add_argument("--output-model-path", default="data/checkpoints/xai_selector.pth")
+    parser.add_argument(
+        "--output-model-path",
+        default=None,
+        help=(
+            "Where to save the trained selector checkpoint. "
+            "Defaults to data/checkpoints/xai_selector_<detector>.pth so that "
+            "different detectors don't overwrite each other."
+        ),
+    )
+    parser.add_argument(
+        "--detector-model",
+        default="yolox-s",
+        choices=["yolox-s", "fasterrcnn_resnet50_fpn_v2"],
+        help="Which detector to use for generating selector training data.",
+    )
     parser.add_argument("--target-detections", type=int, default=2000)
     parser.add_argument("--max-images", type=int, default=400)
     parser.add_argument("--max-detections-per-image", type=int, default=5)
@@ -544,6 +568,10 @@ def main() -> None:
     setup_logging(args.log_level)
 
     methods = [method.strip() for method in args.methods.split(",") if method.strip()]
+    output_model_path = (
+        args.output_model_path
+        or f"data/checkpoints/xai_selector_{args.detector_model}.pth"
+    )
     config = SelectorTrainingConfig(
         detector_config=args.detector_config,
         xai_config=args.xai_config,
@@ -552,7 +580,8 @@ def main() -> None:
         images_dir=args.images_dir,
         output_csv=args.output_csv,
         progress_csv=args.progress_csv,
-        output_model_path=args.output_model_path,
+        output_model_path=output_model_path,
+        detector_model=args.detector_model,
         target_detections=args.target_detections,
         max_images=args.max_images,
         max_detections_per_image=args.max_detections_per_image,

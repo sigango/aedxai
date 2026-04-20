@@ -137,12 +137,15 @@ class AutoEvaluator:
             self.config.get(
                 "composite_weights",
                 {
-                    "pg": _equal_weight,
+                    "ebpg": _equal_weight,
                     "oa": _equal_weight,
                     "sparsity": _equal_weight,
                 },
             )
         )
+        # Backward compat: legacy configs with "pg" weight are treated as "ebpg".
+        if "ebpg" not in self.composite_weights and "pg" in self.composite_weights:
+            self.composite_weights["ebpg"] = self.composite_weights.pop("pg")
 
         self.over_all_config = dict(self.metrics_config.get("over_all", {}))
         self.sparsity_config = dict(self.metrics_config.get("sparsity", {}))
@@ -220,7 +223,7 @@ class AutoEvaluator:
                 y_coord, x_coord = np.unravel_index(int(flat_index), saliency.shape)
                 current_deletion[y_coord, x_coord] = baseline[y_coord, x_coord]
 
-        trapz = getattr(np, "trapezoid", np.trapz)
+        trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
         insertion_auc = float(np.clip(trapz(insertion_scores, x_coords), 0.0, 1.0))
         deletion_auc = float(np.clip(trapz(deletion_scores, x_coords), 0.0, 1.0))
         return insertion_auc, deletion_auc
@@ -276,8 +279,18 @@ class AutoEvaluator:
         """Compute the weighted AED-XAI composite score in the stable [0, 1] range."""
         source = eval_result_partial.as_dict() if isinstance(eval_result_partial, EvalResult) else eval_result_partial
         active_weights = dict(weights) if weights is not None else self.composite_weights
+        if "ebpg" not in active_weights and "pg" in active_weights:
+            active_weights = {**active_weights, "ebpg": active_weights["pg"]}
 
-        pg = float(np.clip(float(source.get("pg", 0.0)), 0.0, 1.0))
+        # Plausibility component: EBPG (continuous, energy-based) instead of PG.
+        # Falls back to "pg" key only if "ebpg" is entirely absent, for compat with
+        # legacy call sites that still pass {"pg": ...}.
+        if "ebpg" in source:
+            plausibility = float(source.get("ebpg", 0.0))
+        else:
+            plausibility = float(source.get("pg", 0.0))
+        plausibility = float(np.clip(plausibility, 0.0, 1.0))
+
         oa = float(source.get("oa", 0.0))
         # OA = insertion_AUC - deletion_AUC ∈ [-1, 1]. Linear map to [0, 1]: (oa + 1) / 2.
         oa_norm = float(np.clip((oa + 1.0) / 2.0, 0.0, 1.0))
@@ -285,7 +298,7 @@ class AutoEvaluator:
         equal_weight = round(1.0 / 3.0, 6)
 
         composite = (
-            float(active_weights.get("pg", equal_weight)) * pg
+            float(active_weights.get("ebpg", equal_weight)) * plausibility
             + float(active_weights.get("oa", equal_weight)) * oa_norm
             + float(active_weights.get("sparsity", equal_weight)) * sparsity
         )
@@ -335,7 +348,7 @@ class AutoEvaluator:
 
         sparsity = self.sparsity_gini(saliency) if self.metrics_config.get("sparsity", {}).get("enabled", True) else 0.0
         computation_time = float(time.time() - t_start)
-        composite = self.composite_score({"pg": pg, "oa": oa, "sparsity": sparsity})
+        composite = self.composite_score({"ebpg": ebpg, "oa": oa, "sparsity": sparsity})
 
         result = EvalResult(
             pg=float(pg),

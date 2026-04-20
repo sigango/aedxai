@@ -419,4 +419,45 @@ def _finalize_saliency_map(saliency: np.ndarray, image_shape: Sequence[int], det
     return saliency.astype(np.float32)
 
 
+def _renormalize_in_bbox(
+    saliency: np.ndarray,
+    bbox: Sequence[int],
+    zero_outside: bool = False,
+) -> np.ndarray:
+    """Rescale saliency so values inside the bbox span [0, 1].
+
+    Adapted from Jacob Gilpin's pytorch-gradcam-book "Renormalizing the CAMs
+    inside every bounding box" trick. In soft mode, only the in-bbox region is
+    rescaled; outside values remain on their incoming (already-normalized [0, 1])
+    scale. In strict mode, outside is zeroed (PG/EBPG will become trivially 1.0).
+    """
+    saliency = np.asarray(saliency, dtype=np.float32)
+    height, width = saliency.shape[:2]
+
+    x1, y1, x2, y2 = [int(value) for value in bbox]
+    x1 = max(0, min(width, x1))
+    x2 = max(0, min(width, x2))
+    y1 = max(0, min(height, y1))
+    y2 = max(0, min(height, y2))
+    if x2 <= x1 or y2 <= y1:
+        return saliency
+
+    out = saliency.copy()
+    inside = out[y1:y2, x1:x2]
+    imin = float(inside.min())
+    imax = float(inside.max())
+    span = imax - imin
+    if span < 1e-8:
+        out[y1:y2, x1:x2] = 0.0
+    else:
+        out[y1:y2, x1:x2] = (inside - imin) / span
+
+    if zero_outside:
+        mask = np.zeros_like(out)
+        mask[y1:y2, x1:x2] = 1.0
+        out = out * mask
+
+    return np.clip(out, 0.0, 1.0).astype(np.float32)
+
+
 __all__ = ["SaliencyMap", "XAIExplainer"]

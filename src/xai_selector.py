@@ -305,15 +305,62 @@ class XAISelector:
 
     def rule_based_fallback(self, detection: Detection, scene_complexity: str) -> str:
         """Heuristic XAI selection when the trained MLP is unavailable."""
+        method, _ = self.rule_based_fallback_with_reason(detection, scene_complexity)
+        return method
+
+    def rule_based_fallback_with_reason(
+        self, detection: Detection, scene_complexity: str
+    ) -> tuple[str, str]:
+        """Return the heuristic choice alongside the rule that fired."""
         if detection.confidence >= 0.7 and scene_complexity == "low":
-            return "gcame"
+            return "gcame", f"confidence={detection.confidence:.2f}>=0.7 AND scene=low -> gcame"
         if detection.confidence < 0.4 or scene_complexity == "high":
-            return "dclose"
+            return "dclose", f"confidence={detection.confidence:.2f}<0.4 OR scene=high -> dclose"
         if detection.relative_size == "small":
-            return "gcame"
+            return "gcame", "relative_size=small -> gcame"
         if detection.relative_size == "large" and scene_complexity == "medium":
-            return "lime"
-        return "gradcam"
+            return "lime", "relative_size=large AND scene=medium -> lime"
+        return "gradcam", "default fallback -> gradcam"
+
+    def predict_reasoning(
+        self,
+        detection: Detection,
+        scene_complexity: str,
+        num_detections: int,
+        image: np.ndarray,
+    ) -> dict[str, Any]:
+        """Return the chosen method plus its reasoning trace.
+
+        Output keys:
+            method: str              the chosen XAI method
+            source: "mlp" | "rule"   which selection path produced it
+            probabilities: dict|None softmax over methods (mlp path only)
+            confidence: float        chosen method's score in [0, 1]
+            rule_trigger: str|None   rule that fired (rule path only)
+        """
+        if not self.is_trained:
+            method, rule_trigger = self.rule_based_fallback_with_reason(detection, scene_complexity)
+            return {
+                "method": method,
+                "source": "rule",
+                "probabilities": None,
+                "confidence": 1.0,
+                "rule_trigger": rule_trigger,
+            }
+
+        features = self.extract_features(detection, scene_complexity, num_detections, image)
+        vector = self._normalize_feature_vector(features)
+        with torch.inference_mode():
+            logits = self.model(torch.from_numpy(vector).unsqueeze(0).to(self.device))
+            probabilities = torch.softmax(logits, dim=1).squeeze(0).cpu().numpy()
+        predicted_index = int(np.argmax(probabilities))
+        return {
+            "method": IDX_TO_METHOD[predicted_index],
+            "source": "mlp",
+            "probabilities": {name: float(probabilities[index]) for index, name in enumerate(METHOD_NAMES)},
+            "confidence": float(probabilities[predicted_index]),
+            "rule_trigger": None,
+        }
 
     def save_model(self, path: str) -> None:
         """Save MLP weights and normalization metadata."""

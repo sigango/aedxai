@@ -251,7 +251,7 @@ class VLMJudge:
             from transformers import (
                 AutoProcessor,
                 BitsAndBytesConfig,
-                Qwen2VLForConditionalGeneration,
+                Qwen2_5_VLForConditionalGeneration,
             )
         except ImportError as exc:
             raise ImportError(
@@ -280,7 +280,7 @@ class VLMJudge:
         if quantization_config is not None:
             model_kwargs["quantization_config"] = quantization_config
 
-        self.model = Qwen2VLForConditionalGeneration.from_pretrained(self.model_name, **model_kwargs)
+        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(self.model_name, **model_kwargs)
         self.model.eval()
         self.processor = AutoProcessor.from_pretrained(self.model_name)
 

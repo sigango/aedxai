@@ -17,10 +17,13 @@ evaluation:
       enabled: true
   
   # Composite score weights (sum must = 1.0)
+  # Plausibility uses EBPG (energy-based pointing game) rather than PG: continuous
+  # signal, robust to per-object saliency renormalization, and standard in recent
+  # XAI-for-detection papers (D-CLOSE, G-CAME).
   composite_weights:
-    pg: 0.333333      # Equal weight — uniform prior over metric importance
-    oa: 0.333333      # Equal weight — see paper Section 3.2 and Appendix A
-    sparsity: 0.333333
+    ebpg: 0.333333    # Plausibility (fraction of saliency energy inside bbox)
+    oa: 0.333333      # Faithfulness (insertion_AUC − deletion_AUC, mapped to [0,1])
+    sparsity: 0.333333  # Focus (Gini coefficient)
   
   # Feedback loop
   feedback:
