@@ -1,7 +1,7 @@
 """Run the AED-XAI pipeline on YOLOX-S and Faster R-CNN and compare results.
 
 Usage (from repo root):
-    python scripts/compare_detectors.py --max-images 50
+    python scripts/compare_detectors.py --max-images 3000
 
 Outputs:
     results/compare_detectors_per_image.csv   per-image, per-detector rows
@@ -144,7 +144,7 @@ def main() -> None:
     parser.add_argument("--xai-config", default="config/xai_config.yaml")
     parser.add_argument("--eval-config", default="config/eval_config.yaml")
     parser.add_argument("--images-dir", default="data/coco/val2017")
-    parser.add_argument("--max-images", type=int, default=50)
+    parser.add_argument("--max-images", type=int, default=3000)
     parser.add_argument(
         "--detectors",
         default=",".join(SUPPORTED_DETECTORS),

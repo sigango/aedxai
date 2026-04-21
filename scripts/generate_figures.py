@@ -116,6 +116,12 @@ class FigureGenerator:
         if frames:
             dataframe = self.pd.concat(frames, ignore_index=True)
             logger.info("Loaded %d real result rows from %s", len(dataframe), self.results_root)
+            cache_path = self.results_root / "main_results.csv"
+            try:
+                dataframe.to_csv(cache_path, index=False)
+                logger.info("Cached unified main_results -> %s", cache_path)
+            except OSError as exc:
+                logger.warning("Could not cache main_results.csv: %s", exc)
             return dataframe
 
         if not self.config.synthesize_if_missing:
@@ -158,6 +164,11 @@ class FigureGenerator:
             "dclose": "D-CLOSE",
             "lime": "LIME",
         }
+        if method in mapping:
+            return mapping[method]
+        for method_key, display_name in mapping.items():
+            if method.endswith(f"_{method_key}"):
+                return display_name
         return mapping.get(method, method)
 
     def _synthesize_main_results(self) -> Any:

@@ -522,8 +522,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-config", default="config/eval_config.yaml")
     parser.add_argument("--annotations-path", default="data/coco/annotations/instances_val2017.json")
     parser.add_argument("--images-dir", default="data/coco/val2017")
-    parser.add_argument("--output-csv", default="results/xai_selector_training_data.csv")
-    parser.add_argument("--progress-csv", default="results/xai_selector_training_progress.csv")
+    parser.add_argument(
+        "--output-csv",
+        default=None,
+        help=(
+            "Where to save the finalized selector training CSV. "
+            "Defaults to results/xai_selector_training_data_<detector>.csv."
+        ),
+    )
+    parser.add_argument(
+        "--progress-csv",
+        default=None,
+        help=(
+            "Where to checkpoint raw oracle-generation progress. "
+            "Defaults to results/xai_selector_training_progress_<detector>.csv."
+        ),
+    )
     parser.add_argument(
         "--output-model-path",
         default=None,
@@ -568,6 +582,14 @@ def main() -> None:
     setup_logging(args.log_level)
 
     methods = [method.strip() for method in args.methods.split(",") if method.strip()]
+    output_csv = (
+        args.output_csv
+        or f"results/xai_selector_training_data_{args.detector_model}.csv"
+    )
+    progress_csv = (
+        args.progress_csv
+        or f"results/xai_selector_training_progress_{args.detector_model}.csv"
+    )
     output_model_path = (
         args.output_model_path
         or f"data/checkpoints/xai_selector_{args.detector_model}.pth"
@@ -578,8 +600,8 @@ def main() -> None:
         eval_config=args.eval_config,
         annotations_path=args.annotations_path,
         images_dir=args.images_dir,
-        output_csv=args.output_csv,
-        progress_csv=args.progress_csv,
+        output_csv=output_csv,
+        progress_csv=progress_csv,
         output_model_path=output_model_path,
         detector_model=args.detector_model,
         target_detections=args.target_detections,

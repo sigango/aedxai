@@ -33,8 +33,9 @@ class ExperimentRunConfig:
     num_images: int
     output: Path
     seed: int
-    selector_model: Path
+    selector_model: Path | None
     log_level: str
+    detector_model: str | None = None
     detector_config: Path = Path("config/detector_config.yaml")
     vlm_config: Path = Path("config/vlm_config.yaml")
     xai_config: Path = Path("config/xai_config.yaml")
@@ -118,14 +119,15 @@ def run_experiment(config: ExperimentRunConfig) -> tuple[pd.DataFrame, dict[str,
         vlm_config_path=str(config.vlm_config),
         xai_config_path=str(config.xai_config),
         eval_config_path=str(config.eval_config),
+        detector_model_name=config.detector_model,
     )
 
     try:
         pipeline.setup()
-        if config.selector_model.exists():
+        if config.selector_model is not None and config.selector_model.exists():
             pipeline.xai_selector = XAISelector(model_path=str(config.selector_model))
             logger.info("Using selector model from %s", config.selector_model)
-        else:
+        elif config.selector_model is not None:
             logger.warning("Selector model not found at %s; using pipeline fallback selector.", config.selector_model)
 
         results: list[PipelineResult] = []
@@ -145,6 +147,11 @@ def run_experiment(config: ExperimentRunConfig) -> tuple[pd.DataFrame, dict[str,
                 )
 
         dataframe = pd.DataFrame([pipeline_result_to_row(result) for result in results])
+        detector_name = (
+            config.detector_model
+            or (pipeline.detector.model_name if pipeline.detector is not None else "unknown")
+        )
+        dataframe.insert(0, "detector", detector_name)
         results_path = config.output / "results.csv"
         dataframe.to_csv(results_path, index=False)
         logger.info("Saved per-image results to %s", results_path)
@@ -163,10 +170,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
     """Build the command-line parser for full AED-XAI experiments."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--images-dir", type=str, default="data/coco/val2017")
-    parser.add_argument("--num-images", type=int, default=200)
+    parser.add_argument("--num-images", type=int, default=3000)
     parser.add_argument("--output", type=str, default="results/aedxai")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--selector-model", type=str, default="data/checkpoints/xai_selector.pth")
+    parser.add_argument(
+        "--detector-model",
+        type=str,
+        default=None,
+        choices=["yolox-s", "fasterrcnn_resnet50_fpn_v2"],
+        help="Optional detector override. If omitted, uses detector_config.yaml primary detector.",
+    )
+    parser.add_argument(
+        "--selector-model",
+        type=str,
+        default="",
+        help=(
+            "Optional selector checkpoint override. If omitted, AEDXAIPipeline "
+            "auto-loads data/checkpoints/xai_selector_<detector>.pth when present."
+        ),
+    )
     parser.add_argument("--log-level", type=str, default="INFO")
     return parser
 
@@ -179,8 +201,9 @@ def main() -> None:
         num_images=int(args.num_images),
         output=_as_project_path(args.output),
         seed=int(args.seed),
-        selector_model=_as_project_path(args.selector_model),
+        selector_model=_as_project_path(args.selector_model) if args.selector_model else None,
         log_level=str(args.log_level),
+        detector_model=args.detector_model,
         detector_config=_as_project_path("config/detector_config.yaml"),
         vlm_config=_as_project_path("config/vlm_config.yaml"),
         xai_config=_as_project_path("config/xai_config.yaml"),

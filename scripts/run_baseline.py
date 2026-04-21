@@ -38,6 +38,7 @@ class BaselineRunConfig:
     xai_method: str
     seed: int
     log_level: str
+    detector_model: str
     detector_config: Path
     xai_config: Path
     eval_config: Path
@@ -126,7 +127,7 @@ def run_baseline(config: BaselineRunConfig) -> pd.DataFrame:
     if not image_paths:
         raise FileNotFoundError(f"No .jpg images found in {config.images_dir}")
 
-    detector = DetectorWrapper("yolox-s", config_path=str(config.detector_config))
+    detector = DetectorWrapper(config.detector_model, config_path=str(config.detector_config))
     detector.load_model()
     method_config = _load_xai_method_config(config.xai_config, config.xai_method)
     explainer = get_explainer(config.xai_method, method_config)
@@ -178,7 +179,11 @@ def run_baseline(config: BaselineRunConfig) -> pd.DataFrame:
             torch.cuda.empty_cache()
 
     dataframe = pd.DataFrame(rows)
-    output_path = config.output / f"baseline_{config.xai_method}_results.csv"
+    dataframe.insert(0, "detector", config.detector_model)
+    if config.detector_model == "yolox-s":
+        output_path = config.output / f"baseline_{config.xai_method}_results.csv"
+    else:
+        output_path = config.output / f"baseline_{config.detector_model}_{config.xai_method}_results.csv"
     dataframe.to_csv(output_path, index=False)
     logger.info("Saved baseline results to %s", output_path)
     summarize_results(dataframe, title=f"Baseline {config.xai_method} Summary")
@@ -189,11 +194,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     """Build the command-line parser for fixed-method baselines."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--images-dir", type=str, default="data/coco/val2017")
-    parser.add_argument("--num-images", type=int, default=200)
+    parser.add_argument("--num-images", type=int, default=3000)
     parser.add_argument("--output", type=str, default="results/baseline")
     parser.add_argument("--xai-method", type=str, default="gradcam", choices=["gradcam", "gcame", "dclose", "lime"])
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--log-level", type=str, default="INFO")
+    parser.add_argument(
+        "--detector-model",
+        type=str,
+        default="yolox-s",
+        choices=["yolox-s", "fasterrcnn_resnet50_fpn_v2"],
+        help="Detector family to evaluate for this fixed-method baseline.",
+    )
     parser.add_argument("--detector-config", type=str, default="config/detector_config.yaml")
     parser.add_argument("--xai-config", type=str, default="config/xai_config.yaml")
     parser.add_argument("--eval-config", type=str, default="config/eval_config.yaml")
@@ -210,6 +222,7 @@ def main() -> None:
         xai_method=str(args.xai_method),
         seed=int(args.seed),
         log_level=str(args.log_level),
+        detector_model=str(args.detector_model),
         detector_config=_as_project_path(args.detector_config),
         xai_config=_as_project_path(args.xai_config),
         eval_config=_as_project_path(args.eval_config),

@@ -7,7 +7,7 @@ actually achieved when the selector is used at inference.
 Usage (from repo root):
     python scripts/ablation_selector_size.py \
         --training-csv results/xai_selector_training_data.csv \
-        --sizes 100,200,500,1000 \
+        --sizes 50,100,200,500,1000 \
         --seeds 42,123,456
 
 Outputs:
@@ -99,6 +99,7 @@ def run_ablation(
     seeds: list[int],
     test_fraction: float,
     epochs: int,
+    detector: str | None = None,
 ) -> pd.DataFrame:
     """Run the ablation sweep and return per-run rows as a DataFrame."""
     dataframe = pd.read_csv(training_csv)
@@ -164,6 +165,7 @@ def run_ablation(
             eval_metrics = _evaluate_on_test(selector, test_df, composite_columns)
 
             row = {
+                "detector": detector if detector is not None else "",
                 "train_size": int(effective_size),
                 "seed": int(seed),
                 "train_acc_internal": float(training_result["train_acc"]),
@@ -185,7 +187,7 @@ def run_ablation(
 
 
 def summarize(per_run_df: pd.DataFrame) -> pd.DataFrame:
-    """Aggregate per-run rows into mean/std per train_size."""
+    """Aggregate per-run rows into mean/std per (detector, train_size)."""
     numeric_cols = [
         "test_accuracy",
         "achieved_composite",
@@ -193,7 +195,8 @@ def summarize(per_run_df: pd.DataFrame) -> pd.DataFrame:
         "gap_to_oracle",
         "random_baseline_composite",
     ]
-    grouped = per_run_df.groupby("train_size")[numeric_cols]
+    group_cols = ["detector", "train_size"] if "detector" in per_run_df.columns else ["train_size"]
+    grouped = per_run_df.groupby(group_cols)[numeric_cols]
     summary = grouped.agg(["mean", "std"]).round(4)
     summary.columns = [f"{metric}_{stat}" for metric, stat in summary.columns]
     return summary.reset_index()
@@ -207,32 +210,51 @@ def plot_ablation(summary_df: pd.DataFrame, output_path: Path) -> None:
         logger.warning("matplotlib not available; skipping plot.")
         return
 
-    sizes = summary_df["train_size"].to_numpy()
     fig, axes = plt.subplots(1, 2, figsize=(11, 4))
 
-    axes[0].errorbar(
-        sizes,
-        summary_df["test_accuracy_mean"],
-        yerr=summary_df["test_accuracy_std"],
-        marker="o",
-        capsize=4,
-    )
+    if "detector" in summary_df.columns and summary_df["detector"].astype(str).str.len().any():
+        grouped = summary_df.groupby("detector", sort=False)
+    else:
+        grouped = [("selector", summary_df)]
+
+    for detector_name, detector_df in grouped:
+        detector_df = detector_df.sort_values("train_size")
+        sizes = detector_df["train_size"].to_numpy()
+        label = str(detector_name) if str(detector_name) else "selector"
+
+        axes[0].errorbar(
+            sizes,
+            detector_df["test_accuracy_mean"],
+            yerr=detector_df["test_accuracy_std"],
+            marker="o",
+            capsize=4,
+            label=label,
+        )
+
+        axes[1].errorbar(
+            sizes,
+            detector_df["achieved_composite_mean"],
+            yerr=detector_df["achieved_composite_std"],
+            marker="o",
+            label=f"{label} selector",
+            capsize=4,
+        )
+        axes[1].plot(sizes, detector_df["oracle_composite_mean"], linestyle="--", alpha=0.7, label=f"{label} oracle")
+        axes[1].plot(
+            sizes,
+            detector_df["random_baseline_composite_mean"],
+            linestyle=":",
+            alpha=0.7,
+            label=f"{label} random",
+        )
+
     axes[0].set_xscale("log")
     axes[0].set_xlabel("Training samples")
     axes[0].set_ylabel("Held-out test accuracy")
     axes[0].set_title("Selector accuracy vs training size")
+    axes[0].legend(fontsize=8)
     axes[0].grid(True, alpha=0.3)
 
-    axes[1].errorbar(
-        sizes,
-        summary_df["achieved_composite_mean"],
-        yerr=summary_df["achieved_composite_std"],
-        marker="o",
-        label="Selector",
-        capsize=4,
-    )
-    axes[1].plot(sizes, summary_df["oracle_composite_mean"], linestyle="--", label="Oracle (max)")
-    axes[1].plot(sizes, summary_df["random_baseline_composite_mean"], linestyle=":", label="Random avg")
     axes[1].set_xscale("log")
     axes[1].set_xlabel("Training samples")
     axes[1].set_ylabel("Mean composite on test set")
@@ -257,7 +279,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--sizes",
-        default="100,200,500,1000",
+        default="50,100,200,500,1000",
         help="Comma-separated training sample sizes to sweep.",
     )
     parser.add_argument(
@@ -268,6 +290,20 @@ def main() -> None:
     parser.add_argument("--test-fraction", type=float, default=0.2)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--output-dir", default="results")
+    parser.add_argument(
+        "--detector",
+        default=None,
+        help=(
+            "Optional detector tag (e.g. yolox-s, fasterrcnn_resnet50_fpn_v2) "
+            "written as a column in the output CSVs so notebook 05 can plot "
+            "per-detector ablation lines. Appends to existing CSVs if present."
+        ),
+    )
+    parser.add_argument(
+        "--append",
+        action="store_true",
+        help="Append to existing output CSVs instead of overwriting.",
+    )
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
 
@@ -289,6 +325,7 @@ def main() -> None:
         seeds=seeds,
         test_fraction=args.test_fraction,
         epochs=args.epochs,
+        detector=args.detector,
     )
     summary_df = summarize(per_run_df)
 
@@ -296,9 +333,23 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     per_run_path = output_dir / "ablation_selector_size.csv"
     summary_path = output_dir / "ablation_selector_size_summary.csv"
-    per_run_df.to_csv(per_run_path, index=False)
-    summary_df.to_csv(summary_path, index=False)
-    plot_ablation(summary_df, output_dir / "figures" / "ablation_selector_size.png")
+
+    if args.append and per_run_path.exists():
+        existing_runs = pd.read_csv(per_run_path)
+        if "detector" not in existing_runs.columns:
+            existing_runs["detector"] = ""
+        combined_runs = pd.concat([existing_runs, per_run_df], ignore_index=True)
+        combined_runs = combined_runs.drop_duplicates(
+            subset=["detector", "train_size", "seed"], keep="last"
+        ).reset_index(drop=True)
+        combined_runs.to_csv(per_run_path, index=False)
+        plot_summary_df = summarize(combined_runs)
+        plot_summary_df.to_csv(summary_path, index=False)
+    else:
+        per_run_df.to_csv(per_run_path, index=False)
+        summary_df.to_csv(summary_path, index=False)
+        plot_summary_df = summary_df
+    plot_ablation(plot_summary_df, output_dir / "figures" / "ablation_selector_size.png")
 
     logger.info("Wrote per-run rows -> %s", per_run_path)
     logger.info("Wrote summary      -> %s", summary_path)

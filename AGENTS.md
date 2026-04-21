@@ -50,6 +50,7 @@ scripts/
   run_experiments.py
   run_baseline.py
   compare_detectors.py
+  run_cross_domain.py
   ablation_selector_size.py
   generate_figures.py
 
@@ -58,7 +59,7 @@ notebooks/
   01_explore_detections.ipynb
   02_vlm_judge_analysis.ipynb
   03_xai_comparison.ipynb
-  04_aedxai.ipynb
+  04_run_all_experiments.ipynb
   05_results_visualization.ipynb
 
 tests/
@@ -558,21 +559,25 @@ bash scripts/download_data.sh
 
 ```bash
 python scripts/train_selector.py \
+  --detector-model yolox-s \
   --max-images 20 \
   --target-detections 100 \
   --checkpoint-every 25 \
   --oracle-mode
 ```
 
-Larger run:
+Detector-specific larger runs:
 
 ```bash
-python scripts/train_selector.py \
-  --max-images 500 \
-  --target-detections 2000 \
-  --checkpoint-every 100 \
-  --oracle-mode \
-  --resume
+for detector in yolox-s fasterrcnn_resnet50_fpn_v2; do
+  python scripts/train_selector.py \
+    --detector-model "$detector" \
+    --max-images 1000 \
+    --target-detections 2000 \
+    --checkpoint-every 100 \
+    --oracle-mode \
+    --resume
+done
 ```
 
 Oracle labeling protocol:
@@ -588,9 +593,9 @@ Oracle labeling protocol:
 ```bash
 python scripts/run_experiments.py \
   --images-dir data/coco/val2017 \
-  --num-images 200 \
+  --num-images 3000 \
   --output results/aedxai \
-  --selector-model data/checkpoints/xai_selector_yolox-s.pth \
+  --detector-model yolox-s \
   --seed 42
 ```
 
@@ -599,8 +604,9 @@ python scripts/run_experiments.py \
 ```bash
 python scripts/run_baseline.py \
   --images-dir data/coco/val2017 \
-  --num-images 200 \
+  --num-images 3000 \
   --output results/baseline \
+  --detector-model yolox-s \
   --xai-method gradcam \
   --seed 42
 ```
@@ -609,18 +615,35 @@ python scripts/run_baseline.py \
 
 ```bash
 python scripts/compare_detectors.py \
-  --max-images 50 \
+  --max-images 3000 \
   --detectors yolox-s,fasterrcnn_resnet50_fpn_v2
 ```
+
+### Cross-Domain Evaluation
+
+```bash
+python scripts/run_cross_domain.py \
+  --num-images 200 \
+  --methods aedxai,gradcam,gcame,dclose,lime \
+  --output-dir results \
+  --recursive
+```
+
+Default domains are COCO, VOC, BDD100K, VisDrone, DOTA, and OpenImages.
+Missing folders are skipped unless `--strict` is passed. The output consumed
+by notebook 05 is `results/cross_domain.csv`.
 
 ### Selector-Size Ablation
 
 ```bash
 python scripts/ablation_selector_size.py \
-  --training-csv results/xai_selector_training_data.csv \
-  --sizes 100,200,500,1000 \
+  --training-csv results/xai_selector_training_data_yolox-s.csv \
+  --sizes 50,100,200,500,1000 \
   --seeds 42,123,456
 ```
+
+Notebook 04 runs selector-size ablations for both detector-specific training
+CSVs and notebook 05 plots the detector-specific curves.
 
 ### Generate Figures
 
@@ -639,7 +662,7 @@ Notebook paths are relative to `notebooks/`.
 01_explore_detections.ipynb   YOLOX qualitative detection exploration
 02_vlm_judge_analysis.ipynb   VLM quality and complexity analysis
 03_xai_comparison.ipynb       XAI method comparison
-04_aedxai.ipynb               full pipeline, selector training, 3000-image evaluation, exports
+04_run_all_experiments.ipynb  full experiment runner, selector training, 3000-image evaluation, exports
 05_results_visualization.ipynb figures and ablation tables from saved outputs
 ```
 

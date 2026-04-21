@@ -86,6 +86,7 @@ scripts/
   run_experiments.py
   run_baseline.py
   compare_detectors.py
+  run_cross_domain.py
   ablation_selector_size.py
   generate_figures.py
 
@@ -94,7 +95,7 @@ notebooks/
   01_explore_detections.ipynb
   02_vlm_judge_analysis.ipynb
   03_xai_comparison.ipynb
-  04_aedxai.ipynb
+  04_run_all_experiments.ipynb
   05_results_visualization.ipynb
 
 tests/
@@ -257,26 +258,32 @@ Small smoke run:
 
 ```bash
 python scripts/train_selector.py \
+  --detector-model yolox-s \
   --max-images 20 \
   --target-detections 100 \
   --checkpoint-every 25 \
   --oracle-mode
 ```
 
-Larger oracle-label run:
+Train detector-specific selector checkpoints for both supported detectors:
 
 ```bash
-python scripts/train_selector.py \
-  --max-images 500 \
-  --target-detections 2000 \
-  --checkpoint-every 100 \
-  --oracle-mode \
-  --resume
+for detector in yolox-s fasterrcnn_resnet50_fpn_v2; do
+  python scripts/train_selector.py \
+    --detector-model "$detector" \
+    --max-images 1000 \
+    --target-detections 2000 \
+    --checkpoint-every 100 \
+    --oracle-mode \
+    --resume
+done
 ```
 
-By default, selector checkpoints are detector-specific:
+By default, selector CSVs and checkpoints are detector-specific:
 
 ```text
+results/xai_selector_training_data_yolox-s.csv
+results/xai_selector_training_data_fasterrcnn_resnet50_fpn_v2.csv
 data/checkpoints/xai_selector_yolox-s.pth
 data/checkpoints/xai_selector_fasterrcnn_resnet50_fpn_v2.pth
 ```
@@ -286,9 +293,9 @@ data/checkpoints/xai_selector_fasterrcnn_resnet50_fpn_v2.pth
 ```bash
 python scripts/run_experiments.py \
   --images-dir data/coco/val2017 \
-  --num-images 200 \
+  --num-images 3000 \
   --output results/aedxai \
-  --selector-model data/checkpoints/xai_selector_yolox-s.pth \
+  --detector-model yolox-s \
   --seed 42
 ```
 
@@ -304,8 +311,9 @@ results/aedxai/summary.json
 ```bash
 python scripts/run_baseline.py \
   --images-dir data/coco/val2017 \
-  --num-images 200 \
+  --num-images 3000 \
   --output results/baseline \
+  --detector-model yolox-s \
   --xai-method gradcam \
   --seed 42
 ```
@@ -316,7 +324,7 @@ Output:
 results/baseline/baseline_gradcam_results.csv
 ```
 
-Repeat with:
+Repeat with `--xai-method` set to:
 
 ```text
 gradcam
@@ -325,12 +333,15 @@ dclose
 lime
 ```
 
+For Faster R-CNN baselines, use `--detector-model fasterrcnn_resnet50_fpn_v2`;
+the output filename includes the detector name to avoid overwriting YOLOX rows.
+
 ### Compare Detectors
 
 ```bash
 python scripts/compare_detectors.py \
   --images-dir data/coco/val2017 \
-  --max-images 50 \
+  --max-images 3000 \
   --detectors yolox-s,fasterrcnn_resnet50_fpn_v2 \
   --output-dir results
 ```
@@ -342,14 +353,49 @@ results/compare_detectors_per_image.csv
 results/compare_detectors_summary.csv
 ```
 
+### Cross-Domain Evaluation
+
+Run AED-XAI and fixed-method baselines on multiple image domains. The default
+dataset list expects folders for COCO, VOC, BDD100K, VisDrone, DOTA, and
+OpenImages; missing folders are skipped unless `--strict` is passed.
+
+```bash
+python scripts/run_cross_domain.py \
+  --num-images 200 \
+  --methods aedxai,gradcam,gcame,dclose,lime \
+  --output-dir results \
+  --recursive
+```
+
+Custom domains use comma-separated `NAME=IMAGE_DIR` entries:
+
+```bash
+python scripts/run_cross_domain.py \
+  --datasets "COCO=data/coco/val2017,VOC=data/voc/VOCdevkit/VOC2012/JPEGImages,VisDrone=data/visdrone/VisDrone2019-DET-val/images" \
+  --num-images 200 \
+  --output-dir results
+```
+
+Outputs:
+
+```text
+results/cross_domain.csv
+results/cross_domain_per_image.csv
+results/cross_domain_summary.csv
+results/cross_domain_summary.json
+```
+
 ### Selector Training-Size Ablation
 
 ```bash
 python scripts/ablation_selector_size.py \
-  --training-csv results/xai_selector_training_data.csv \
-  --sizes 100,200,500,1000 \
+  --training-csv results/xai_selector_training_data_yolox-s.csv \
+  --sizes 50,100,200,500,1000 \
   --seeds 42,123,456
 ```
+
+Notebook 04 runs this for both detector-specific selector CSVs and writes a
+combined detector-aware ablation table.
 
 Outputs:
 
@@ -425,7 +471,7 @@ det_000_saliency.npy   # optional
 - `01_explore_detections.ipynb`: qualitative YOLOX-S detection exploration.
 - `02_vlm_judge_analysis.ipynb`: VLM quality, scene complexity, false positive, and latency analysis.
 - `03_xai_comparison.ipynb`: side-by-side XAI comparison across four methods.
-- `04_aedxai.ipynb`: interactive end-to-end pipeline run, detector-specific selector training, 3000-image evaluation, baseline comparison, detector comparison, and result export.
+- `04_run_all_experiments.ipynb`: end-to-end experiment runner, detector-specific selector training, 3000-image evaluation, baseline comparison, detector comparison, cross-domain evaluation, and result export.
 - `05_results_visualization.ipynb`: publication-style figures and ablation tables from saved CSV/JSON outputs.
 
 Some notebooks cache expensive VLM/XAI results under `data/`.
