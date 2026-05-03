@@ -8,7 +8,7 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 import numpy as np
 import pandas as pd
@@ -45,11 +45,13 @@ class SelectorTrainingConfig:
     output_model_path: str = "data/checkpoints/xai_selector.pth"
     detector_model: str = "yolox-s"
     target_detections: int = 2000
-    max_images: int = 400
+    max_images: int = 1000
     max_detections_per_image: int = 5
     checkpoint_every: int = 100
     resume: bool = False
     oracle_mode: bool = True
+    oracle_margin_threshold: float = 0.05
+    drop_ambiguous: bool = True
     sample_seed: int = 42
     methods: list[str] = field(default_factory=lambda: list(METHOD_NAMES))
 
@@ -109,9 +111,17 @@ class SelectorTrainingRunner:
     Oracle Labeling Protocol (Section 3.3 of the paper):
         For each detection in the training corpus, ALL four XAI methods
         (GradCAM, G-CAME, D-CLOSE, LIME) are exhaustively evaluated.
-        The method achieving the highest composite score
-        ((PG + OA + Sparsity) / 3, normalised per metric
-        across the dataset) is assigned as the oracle label.
+        Oracle labels are assigned with a local faithfulness-aware rule:
+            1. For each detection, EBPG / OA / Sparsity are normalized
+               ACROSS METHODS for that detection only.
+            2. The oracle score is:
+                   0.55 * OA_local + 0.25 * EBPG_local + 0.20 * Sparsity_local
+            3. The method with the highest oracle score becomes the label.
+            4. Ambiguous detections with top-1 vs top-2 oracle margin below
+               `oracle_margin_threshold` are dropped by default.
+
+        This replaces the older global-equal oracle that tended to collapse
+        toward G-CAME due to bbox-centric plausibility bias.
 
         The selector MLP is then trained to predict this label from
         pre-explanation context features only:
@@ -140,7 +150,10 @@ class SelectorTrainingRunner:
         if self.config.oracle_mode:
             logger.info(
                 "Oracle labeling mode enabled: all configured XAI methods will be "
-                "run on every selected detection to generate offline oracle labels."
+                "run on every selected detection to generate offline oracle labels. "
+                "Using local faithfulness-aware relabeling with margin threshold %.3f%s.",
+                self.config.oracle_margin_threshold,
+                " (dropping ambiguous detections)" if self.config.drop_ambiguous else "",
             )
         progress_df = self._generate_training_data()
         final_df = self._finalize_training_dataframe(progress_df)
@@ -297,7 +310,7 @@ class SelectorTrainingRunner:
         }
 
     def _finalize_training_dataframe(self, dataframe: pd.DataFrame) -> pd.DataFrame:
-        """Normalize metrics across the dataset and assign best-method labels."""
+        """Finalize selector data and assign local faithfulness-aware oracle labels."""
         if dataframe.empty:
             raise ValueError("No selector training rows were generated.")
 
@@ -307,8 +320,8 @@ class SelectorTrainingRunner:
         if not present_columns:
             return dataframe
 
-        # Oracle composite uses EBPG (continuous plausibility) instead of PG (binary);
-        # matches the runtime composite_score in src/evaluator.py.
+        # Keep global normalized composites for downstream diagnostics/backward
+        # compatibility only. They are NOT used for oracle labels.
         for metric_name in ("ebpg", "oa", "sparsity"):
             metric_columns = [f"{metric_name}_{method_name}" for method_name in METHOD_NAMES if f"{metric_name}_{method_name}" in dataframe.columns]
             if not metric_columns:
@@ -346,47 +359,92 @@ class SelectorTrainingRunner:
                 dataframe[f"composite_{method_name}"] = composite
                 composites.append(composite.to_numpy())
 
-            # Log per-method mean composite score for diagnostics
-            logger.info("=== PER-METHOD MEAN COMPOSITE SCORES ===")
+            # Diagnostic only: these scores are globally normalized and should
+            # not be interpreted as the selector's training target.
+            logger.info("=== PER-METHOD GLOBAL DIAGNOSTIC SCORES (NOT ORACLE TARGETS) ===")
             for method_name in METHOD_NAMES:
                 col = f"composite_{method_name}"
                 if col in dataframe.columns:
                     logger.info(
-                        "  %-10s  mean_composite=%.4f  std=%.4f",
+                        "  %-10s  mean_score=%.4f  std=%.4f",
                         method_name,
                         float(dataframe[col].mean()),
                         float(dataframe[col].std()),
                     )
 
-            composite_matrix = np.stack(composites, axis=1)
-            best_indices = np.argmax(composite_matrix, axis=1)
-            dataframe["best_method_label"] = best_indices.astype(np.int64)
-
-            label_counts = pd.Series(best_indices).value_counts(normalize=True).sort_index()
-            # --- Oracle label distribution (paper Table 3 data source) ---
-            label_counts_abs = pd.Series(best_indices).value_counts().sort_index()
-            logger.info(
-                "=== ORACLE LABEL DISTRIBUTION (n=%d detections) ===",
-                len(dataframe),
-            )
-            for method_name in METHOD_NAMES:
-                idx = METHOD_TO_IDX[method_name]
-                count = int(label_counts_abs.get(idx, 0))
-                pct = float(label_counts.get(idx, 0.0)) * 100.0
-                logger.info("  %-10s  idx=%d  count=%5d  pct=%5.1f%%", method_name, idx, count, pct)
-
-            # Warn if any method is never selected (degenerate distribution)
-            never_selected = [
-                method_name for method_name in METHOD_NAMES
-                if float(label_counts.get(METHOD_TO_IDX[method_name], 0.0)) == 0.0
-            ]
-            if never_selected:
-                logger.warning(
-                    "Methods NEVER selected as oracle best: %s. "
-                    "Consider checking your composite weights or that these "
-                    "methods are functioning correctly.",
-                    never_selected,
+            local_metric_scores: dict[str, np.ndarray] = {}
+            raw_metric_matrices: dict[str, np.ndarray] = {}
+            for metric_name in ("ebpg", "oa", "sparsity"):
+                metric_matrix = np.stack(
+                    [
+                        dataframe[f"{metric_name}_{method_name}"].to_numpy(dtype=np.float32)
+                        for method_name in METHOD_NAMES
+                    ],
+                    axis=1,
                 )
+                raw_metric_matrices[metric_name] = metric_matrix
+                row_min = metric_matrix.min(axis=1, keepdims=True)
+                row_max = metric_matrix.max(axis=1, keepdims=True)
+                row_scale = row_max - row_min
+                normalized = (metric_matrix - row_min) / (row_scale + 1e-8)
+                constant_rows = (row_scale[:, 0] < 1e-8)
+                if np.any(constant_rows):
+                    normalized[constant_rows] = 0.0
+                local_metric_scores[metric_name] = normalized.astype(np.float32)
+
+            oa_spread = raw_metric_matrices["oa"].max(axis=1) - raw_metric_matrices["oa"].min(axis=1)
+            logger.info(
+                "OA spread across methods: mean=%.4f  median=%.4f  pct(<0.10)=%.1f%%",
+                float(np.mean(oa_spread)),
+                float(np.median(oa_spread)),
+                float(np.mean(oa_spread < 0.10) * 100.0),
+            )
+
+            oracle_matrix = (
+                0.25 * local_metric_scores["ebpg"]
+                + 0.55 * local_metric_scores["oa"]
+                + 0.20 * local_metric_scores["sparsity"]
+            ).astype(np.float32)
+
+            for method_index, method_name in enumerate(METHOD_NAMES):
+                dataframe[f"oracle_score_{method_name}"] = oracle_matrix[:, method_index]
+
+            best_indices = np.argmax(oracle_matrix, axis=1).astype(np.int64)
+            best_method_names = np.asarray(METHOD_NAMES, dtype=object)[best_indices]
+            sorted_scores = np.sort(oracle_matrix, axis=1)
+            top_scores = sorted_scores[:, -1]
+            second_scores = sorted_scores[:, -2] if oracle_matrix.shape[1] > 1 else np.zeros_like(top_scores)
+            oracle_margin = top_scores - second_scores
+            oracle_is_ambiguous = oracle_margin < float(self.config.oracle_margin_threshold)
+            fully_flat_rows = (
+                (raw_metric_matrices["ebpg"].max(axis=1) - raw_metric_matrices["ebpg"].min(axis=1) < 1e-8)
+                & (raw_metric_matrices["oa"].max(axis=1) - raw_metric_matrices["oa"].min(axis=1) < 1e-8)
+                & (raw_metric_matrices["sparsity"].max(axis=1) - raw_metric_matrices["sparsity"].min(axis=1) < 1e-8)
+            )
+
+            dataframe["best_method_label"] = best_indices
+            dataframe["best_method_name"] = best_method_names
+            dataframe["oracle_margin"] = oracle_margin.astype(np.float32)
+            dataframe["oracle_is_ambiguous"] = oracle_is_ambiguous.astype(bool)
+
+            if self.config.drop_ambiguous:
+                dropped = int(oracle_is_ambiguous.sum())
+                if dropped > 0:
+                    logger.info(
+                        "Dropping %d ambiguous detections with oracle margin < %.3f "
+                        "(including %d fully-flat rows).",
+                        dropped,
+                        self.config.oracle_margin_threshold,
+                        int(fully_flat_rows.sum()),
+                    )
+                dataframe = dataframe.loc[~oracle_is_ambiguous].copy()
+                if dataframe.empty:
+                    raise ValueError(
+                        "All selector examples were filtered as ambiguous. "
+                        "Lower --oracle-margin-threshold or pass --keep-ambiguous."
+                    )
+
+            self._log_oracle_distribution(dataframe)
         else:
             logger.warning(
                 "Only methods %s are present in progress data. "
@@ -402,10 +460,46 @@ class SelectorTrainingRunner:
                     for method_name in METHOD_NAMES
                     if f"{metric_name}_{method_name}" in dataframe.columns
                 ]
+            final_columns += [
+                f"oracle_score_{method_name}"
+                for method_name in METHOD_NAMES
+                if f"oracle_score_{method_name}" in dataframe.columns
+            ]
+            for optional_column in ("best_method_name", "oracle_margin", "oracle_is_ambiguous"):
+                if optional_column in dataframe.columns:
+                    final_columns.append(optional_column)
             final_columns.append("best_method_label")
             return dataframe[final_columns]
 
         return dataframe
+
+    @staticmethod
+    def _log_oracle_distribution(dataframe: pd.DataFrame) -> None:
+        """Log the final oracle label distribution after ambiguity filtering."""
+        best_indices = dataframe["best_method_label"].to_numpy(dtype=np.int64)
+        label_counts = pd.Series(best_indices).value_counts(normalize=True).sort_index()
+        label_counts_abs = pd.Series(best_indices).value_counts().sort_index()
+        logger.info(
+            "=== ORACLE LABEL DISTRIBUTION (n=%d detections) ===",
+            len(dataframe),
+        )
+        for method_name in METHOD_NAMES:
+            idx = METHOD_TO_IDX[method_name]
+            count = int(label_counts_abs.get(idx, 0))
+            pct = float(label_counts.get(idx, 0.0)) * 100.0
+            logger.info("  %-10s  idx=%d  count=%5d  pct=%5.1f%%", method_name, idx, count, pct)
+
+        never_selected = [
+            method_name
+            for method_name in METHOD_NAMES
+            if float(label_counts.get(METHOD_TO_IDX[method_name], 0.0)) == 0.0
+        ]
+        if never_selected:
+            logger.warning(
+                "Methods NEVER selected as oracle best: %s. "
+                "This may still indicate residual metric bias or a weak implementation.",
+                never_selected,
+            )
 
     def _load_coco_annotations(self, annotations_path: str) -> dict[str, Any]:
         """Load COCO annotations into lookup-friendly structures."""
@@ -554,12 +648,26 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Which detector to use for generating selector training data.",
     )
     parser.add_argument("--target-detections", type=int, default=2000)
-    parser.add_argument("--max-images", type=int, default=400)
+    parser.add_argument("--max-images", type=int, default=1000)
     parser.add_argument("--max-detections-per-image", type=int, default=5)
     parser.add_argument("--checkpoint-every", type=int, default=100)
     parser.add_argument("--sample-seed", type=int, default=42)
     parser.add_argument("--methods", default="gradcam,gcame,dclose,lime")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--oracle-margin-threshold",
+        type=float,
+        default=0.05,
+        help=(
+            "Drop detections whose top-1 vs top-2 oracle score gap is smaller than "
+            "this threshold. Higher values produce cleaner but smaller training sets."
+        ),
+    )
+    parser.add_argument(
+        "--keep-ambiguous",
+        action="store_true",
+        help="Keep low-margin detections instead of filtering them out during oracle labeling.",
+    )
     parser.add_argument(
         "--oracle-mode",
         action="store_true",
@@ -610,6 +718,8 @@ def main() -> None:
         checkpoint_every=args.checkpoint_every,
         resume=args.resume,
         oracle_mode=args.oracle_mode,
+        oracle_margin_threshold=args.oracle_margin_threshold,
+        drop_ambiguous=not args.keep_ambiguous,
         sample_seed=args.sample_seed,
         methods=methods,
     )

@@ -170,7 +170,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     """Build the command-line parser for full AED-XAI experiments."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--images-dir", type=str, default="data/coco/val2017")
-    parser.add_argument("--num-images", type=int, default=3000)
+    parser.add_argument("--num-images", type=int, default=1000)
     parser.add_argument("--output", type=str, default="results/aedxai")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(

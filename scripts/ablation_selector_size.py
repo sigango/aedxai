@@ -43,36 +43,43 @@ from src.xai_selector import (
 logger = logging.getLogger("ablation_selector_size")
 
 
-COMPOSITE_PREFIX = "composite_"
+def _select_score_columns(dataframe: pd.DataFrame) -> tuple[list[str], str]:
+    """Pick the score family used for selector ablation evaluation.
 
+    Preference order:
+    1. oracle_score_{method}: matches the selector's training target
+    2. composite_{method}: legacy fallback for older CSVs
+    """
+    oracle_columns = [f"oracle_score_{method}" for method in METHOD_NAMES]
+    if all(column in dataframe.columns for column in oracle_columns):
+        return oracle_columns, "oracle_score"
 
-def _require_composite_columns(dataframe: pd.DataFrame) -> list[str]:
-    """Ensure the CSV has composite_{method} columns; return them."""
-    missing = [method for method in METHOD_NAMES if f"{COMPOSITE_PREFIX}{method}" not in dataframe.columns]
+    composite_columns = [f"composite_{method}" for method in METHOD_NAMES]
+    missing = [column for column in composite_columns if column not in dataframe.columns]
     if missing:
         raise ValueError(
-            "Training CSV is missing composite_{method} columns for: "
-            f"{missing}. Regenerate with scripts/train_selector.py so that "
-            "the finalize step writes per-method composite scores."
+            "Training CSV is missing both oracle_score_{method} and composite_{method} "
+            f"columns. Missing composite columns: {missing}"
         )
-    return [f"{COMPOSITE_PREFIX}{method}" for method in METHOD_NAMES]
+    return composite_columns, "composite"
 
 
 def _evaluate_on_test(
     selector: XAISelector,
     test_df: pd.DataFrame,
-    composite_columns: list[str],
+    score_columns: list[str],
+    score_source: str,
 ) -> dict[str, float]:
     """Evaluate a trained selector on the held-out test DataFrame."""
     x_test, y_test = selector._prepare_dataframe_tensors(test_df)  # noqa: SLF001
     predicted_indices = selector._predict_indices(x_test)  # noqa: SLF001
     test_accuracy = float(np.mean(predicted_indices == y_test))
 
-    composite_matrix = test_df[composite_columns].to_numpy(dtype=np.float32)
-    row_indices = np.arange(composite_matrix.shape[0])
-    achieved_composite = float(composite_matrix[row_indices, predicted_indices].mean())
-    oracle_composite = float(composite_matrix.max(axis=1).mean())
-    mean_composite_by_method = composite_matrix.mean(axis=0)
+    score_matrix = test_df[score_columns].to_numpy(dtype=np.float32)
+    row_indices = np.arange(score_matrix.shape[0])
+    achieved_composite = float(score_matrix[row_indices, predicted_indices].mean())
+    oracle_composite = float(score_matrix.max(axis=1).mean())
+    mean_composite_by_method = score_matrix.mean(axis=0)
     random_baseline = float(mean_composite_by_method.mean())
 
     return {
@@ -81,6 +88,7 @@ def _evaluate_on_test(
         "oracle_composite": oracle_composite,
         "gap_to_oracle": oracle_composite - achieved_composite,
         "random_baseline_composite": random_baseline,
+        "score_source": score_source,
     }
 
 
@@ -105,7 +113,7 @@ def run_ablation(
     dataframe = pd.read_csv(training_csv)
     if "best_method_label" not in dataframe.columns:
         raise ValueError("Training CSV must include 'best_method_label'.")
-    composite_columns = _require_composite_columns(dataframe)
+    score_columns, score_source = _select_score_columns(dataframe)
 
     dataframe = dataframe.reset_index(drop=True)
     labels = dataframe["best_method_label"].to_numpy(dtype=np.int64)
@@ -162,7 +170,7 @@ def run_ablation(
                 lr=0.001,
                 batch_size=min(64, max(8, effective_size // 8)),
             )
-            eval_metrics = _evaluate_on_test(selector, test_df, composite_columns)
+            eval_metrics = _evaluate_on_test(selector, test_df, score_columns, score_source)
 
             row = {
                 "detector": detector if detector is not None else "",
@@ -173,13 +181,14 @@ def run_ablation(
                 **eval_metrics,
             }
             logger.info(
-                "size=%4d seed=%3d | test_acc=%.4f achieved=%.4f oracle=%.4f gap=%.4f",
+                "size=%4d seed=%3d | test_acc=%.4f achieved=%.4f oracle=%.4f gap=%.4f source=%s",
                 row["train_size"],
                 row["seed"],
                 row["test_accuracy"],
                 row["achieved_composite"],
                 row["oracle_composite"],
                 row["gap_to_oracle"],
+                row["score_source"],
             )
             rows.append(row)
 

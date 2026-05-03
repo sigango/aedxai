@@ -293,7 +293,7 @@ data/checkpoints/xai_selector_fasterrcnn_resnet50_fpn_v2.pth
 ```bash
 python scripts/run_experiments.py \
   --images-dir data/coco/val2017 \
-  --num-images 3000 \
+  --num-images 1000 \
   --output results/aedxai \
   --detector-model yolox-s \
   --seed 42
@@ -311,7 +311,7 @@ results/aedxai/summary.json
 ```bash
 python scripts/run_baseline.py \
   --images-dir data/coco/val2017 \
-  --num-images 3000 \
+  --num-images 1000 \
   --output results/baseline \
   --detector-model yolox-s \
   --xai-method gradcam \
@@ -341,7 +341,7 @@ the output filename includes the detector name to avoid overwriting YOLOX rows.
 ```bash
 python scripts/compare_detectors.py \
   --images-dir data/coco/val2017 \
-  --max-images 3000 \
+  --max-images 1000 \
   --detectors yolox-s,fasterrcnn_resnet50_fpn_v2 \
   --output-dir results
 ```
@@ -471,7 +471,7 @@ det_000_saliency.npy   # optional
 - `01_explore_detections.ipynb`: qualitative YOLOX-S detection exploration.
 - `02_vlm_judge_analysis.ipynb`: VLM quality, scene complexity, false positive, and latency analysis.
 - `03_xai_comparison.ipynb`: side-by-side XAI comparison across four methods.
-- `04_run_all_experiments.ipynb`: end-to-end experiment runner, detector-specific selector training, 3000-image evaluation, baseline comparison, detector comparison, cross-domain evaluation, and result export.
+- `04_run_all_experiments.ipynb`: end-to-end experiment runner, detector-specific selector training, 1000-image evaluation, baseline comparison, detector comparison, cross-domain evaluation, and result export.
 - `05_results_visualization.ipynb`: publication-style figures and ablation tables from saved CSV/JSON outputs.
 
 Some notebooks cache expensive VLM/XAI results under `data/`.
