@@ -194,44 +194,67 @@ def test_computation_time_logged(
     assert result.computation_time > 0
     assert isinstance(result.computation_time, float)
 
-@pytest.mark.skipif(
-    not torch.cuda.is_available(),
-    reason="10x speedup assertion requires GPU; CPU timing is unreliable"
-)
-def test_gradcam_faster_than_dclose(
+def _count_forwarded_images(model: torch.nn.Module) -> tuple[dict[str, int], object]:
+    """Count the images that pass through ``model`` (a batch of N counts as N)."""
+    counter = {"images": 0}
+
+    def _hook(_module, args) -> None:
+        images = args[0] if args else None
+        if isinstance(images, (list, tuple)):
+            counter["images"] += len(images)
+        elif hasattr(images, "shape"):
+            counter["images"] += int(images.shape[0])
+
+    return counter, model.register_forward_pre_hook(_hook)
+
+
+def test_dclose_forwards_more_images_than_gradcam(
     toy_image: np.ndarray,
     toy_detection: Detection,
-    toy_model: ToyDetectionModel,
-    toy_target_layer,
 ) -> None:
-    """GradCAM should be at least 10x faster than D-CLOSE on the same input.
+    """D-CLOSE must push every perturbation mask through the detector; GradCAM needs one pass.
 
-    GradCAM = 1 forward pass + 1 backward pass.
-    D-CLOSE = N_masks perturbation forward passes (default 50-200).
-    A 10x factor is conservative; typical GPU speedup is 20-50x.
-    If this fails, check that D-CLOSE n_masks >= 50 in xai_config.yaml.
+    This used to compare wall-clock times (GradCAM >10x faster). Since D-CLOSE
+    batches its masks (``batch_size``), its runtime on a small model is dominated
+    by fixed overheads and no longer scales with the number of masks, so the
+    check counts forwarded images instead.
     """
     pytest.importorskip("captum")
     pytest.importorskip("skimage")
+    num_masks = 300
 
-    gradcam_result = GradCAMExplainer(_load_method_config("gradcam")).explain(
-        toy_model,
-        toy_image,
-        toy_detection,
-        toy_target_layer,
+    gradcam_model = ToyDetectionModel().eval()
+    gradcam_counter, handle = _count_forwarded_images(gradcam_model)
+    try:
+        GradCAMExplainer(_load_method_config("gradcam")).explain(
+            gradcam_model,
+            toy_image,
+            toy_detection,
+            gradcam_model.features[0],
+        )
+    finally:
+        handle.remove()
+
+    dclose_model = ToyDetectionModel().eval()
+    dclose_counter, handle = _count_forwarded_images(dclose_model)
+    try:
+        DCLOSEExplainer(
+            {**_load_method_config("dclose"), "num_masks_dev": num_masks, "segmentation_scales": [20, 40, 60]}
+        ).explain(
+            dclose_model,
+            toy_image,
+            toy_detection,
+            None,
+        )
+    finally:
+        handle.remove()
+
+    assert gradcam_counter["images"] >= 1
+    assert dclose_counter["images"] >= num_masks, (
+        f"D-CLOSE forwarded {dclose_counter['images']} images for {num_masks} masks."
     )
-    dclose_result = DCLOSEExplainer(
-        {**_load_method_config("dclose"), "num_masks_dev": 300, "segmentation_scales": [20, 40, 60]}
-    ).explain(
-        toy_model,
-        toy_image,
-        toy_detection,
-        None,
-    )
-    assert gradcam_result.computation_time * 10 < dclose_result.computation_time, (
-        f"GradCAM ({gradcam_result.computation_time:.4f}s) should be >10x faster than "
-        f"D-CLOSE ({dclose_result.computation_time:.4f}s). "
-        "D-CLOSE may not be running the expected number of perturbations."
+    assert dclose_counter["images"] >= 10 * gradcam_counter["images"], (
+        f"D-CLOSE forwarded {dclose_counter['images']} images, GradCAM {gradcam_counter['images']}."
     )
 
 
