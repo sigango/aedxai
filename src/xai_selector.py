@@ -497,13 +497,11 @@ class XAISelector:
         self.model = XAISelectorMLP().to(self.device)
         optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
 
-        class_counts = np.bincount(y_train, minlength=len(METHOD_NAMES)).astype(np.float32)
-        class_weights = np.where(class_counts > 0, 1.0 / class_counts, 0.0)
-        if class_weights.sum() > 0:
-            class_weights = class_weights * (len(METHOD_NAMES) / class_weights.sum())
-        else:
-            class_weights = np.ones(len(METHOD_NAMES), dtype=np.float32)
-        criterion = nn.CrossEntropyLoss(weight=torch.from_numpy(class_weights).to(self.device))
+        # Unweighted loss on purpose: the majority oracle label is also the
+        # highest-composite method, so inverse-frequency weighting shifts
+        # predictions toward low-value minority methods and lowers the
+        # achieved composite at inference.
+        criterion = nn.CrossEntropyLoss()
 
         best_state: dict[str, torch.Tensor] | None = None
         best_val_acc = -1.0

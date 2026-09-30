@@ -14,6 +14,7 @@ from .base import (
     XAIExplainer,
     _extract_target_score_from_output,
     _finalize_saliency_map,
+    _finalize_saliency_map_with_flag,
     _forward_detector_from_tensor,
     _prepare_model_input,
     _renormalize_in_bbox,
@@ -98,6 +99,8 @@ class GradCAMExplainer(XAIExplainer):
 
         input_tensor, meta = _prepare_model_input(model, image)
         wrapper = _DetectionTargetModule(model, detection, meta)
+        is_fallback = False
+        fallback_reason: str | None = None
         layer_gradcam = LayerGradCam(wrapper, target_layer)
 
         try:
@@ -109,7 +112,9 @@ class GradCAMExplainer(XAIExplainer):
             if cam.ndim == 3:
                 cam = cam.mean(axis=0)
             cam = np.maximum(cam, 0.0)
-            cam = _finalize_saliency_map(cam, image.shape[:2], detection)
+            cam, is_fallback = _finalize_saliency_map_with_flag(cam, image.shape[:2], detection)
+            if is_fallback:
+                fallback_reason = "zero_map"
             if bool(self.config.get("renormalize_in_bbox", True)):
                 cam = _renormalize_in_bbox(
                     cam,
@@ -123,6 +128,8 @@ class GradCAMExplainer(XAIExplainer):
                 exc,
             )
             cam = _finalize_saliency_map(np.zeros(image.shape[:2], dtype=np.float32), image.shape[:2], detection)
+            is_fallback = True
+            fallback_reason = f"exception: {type(exc).__name__}"
         finally:
             del layer_gradcam
             gc.collect()
@@ -134,4 +141,6 @@ class GradCAMExplainer(XAIExplainer):
             method_name="gradcam",
             computation_time=float(time.time() - t_start),
             detection_id=detection.detection_id,
+            is_fallback=is_fallback,
+            fallback_reason=fallback_reason,
         )

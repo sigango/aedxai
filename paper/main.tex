@@ -1,0 +1,40 @@
+% Draft driver. For submission, copy the sections into the official CVPR 2027
+% author kit (cvpr.sty, review mode) and delete the preamble below.
+\documentclass[10pt,twocolumn,letterpaper]{article}
+\usepackage[margin=0.75in]{geometry}
+\usepackage{times}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage[dvipsnames]{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage[capitalize]{cleveref}
+\usepackage{xspace}
+% Provided by cvpr.sty in the official kit.
+\providecommand{\etal}{\emph{et al}.\xspace}
+\providecommand{\vs}{vs.\xspace}
+
+% Numbers still to be recomputed on the frozen v2 test split (blue),
+% and open writing tasks (red). Both must be gone before submission.
+\newcommand{\res}[1]{\textcolor{blue}{#1}}
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+% Working name of the framework; replace globally if a better one is chosen.
+\newcommand{\method}{EvE}
+
+\title{Do Explanations Know When a Detector Is Wrong?\\
+Explanation Evidence for Verifying Object Detections}
+\author{Anonymous submission}
+\date{}
+
+\begin{document}
+\maketitle
+
+\input{sections/1_intro}
+\input{sections/2_related}
+
+{\small
+\bibliographystyle{ieee_fullname}
+\bibliography{refs}
+}
+
+\end{document}

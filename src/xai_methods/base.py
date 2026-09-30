@@ -26,6 +26,10 @@ class SaliencyMap:
     method_name: str
     computation_time: float
     detection_id: int
+    # True when the explainer failed (exception or all-zero map) and the map is
+    # the bbox-centred Gaussian prior rather than a genuine explanation.
+    is_fallback: bool = False
+    fallback_reason: str | None = None
 
     @property
     def saliency(self) -> np.ndarray:
@@ -179,6 +183,33 @@ def _forward_detector(model: Any, image: np.ndarray, require_grad: bool = False)
     with context:
         output = _forward_detector_from_tensor(model, input_tensor, meta["family"])
     return output, input_tensor, meta
+
+
+def _forward_detector_batch(model: Any, images: Sequence[np.ndarray]) -> list[tuple[Any, dict[str, Any]]]:
+    """Run one no-grad forward pass over same-sized images; return per-image (output, meta).
+
+    Each per-image output has the same structure a single-image forward would
+    produce, so it can be passed to _extract_candidates_from_output unchanged.
+    """
+    torch = _require_torch()
+    if not images:
+        return []
+    prepared = [_prepare_model_input(model, image) for image in images]
+    metas = [meta for _, meta in prepared]
+    family = str(metas[0]["family"])
+    batch = torch.cat([tensor for tensor, _ in prepared], dim=0)
+    with torch.no_grad():
+        output = _forward_detector_from_tensor(model, batch, family)
+
+    if isinstance(output, torch.Tensor):
+        per_image = [output[index : index + 1] for index in range(len(images))]
+    elif isinstance(output, (list, tuple)) and len(output) == len(images):
+        per_image = [[item] for item in output]
+    else:
+        raise RuntimeError(
+            f"Cannot split batched detector output of type {type(output).__name__} for {len(images)} images."
+        )
+    return list(zip(per_image, metas))
 
 
 def _map_label_to_coco(label: int) -> int | None:
@@ -406,6 +437,16 @@ def _bbox_prior_map(image_shape: Sequence[int], detection: Detection) -> np.ndar
 
 def _finalize_saliency_map(saliency: np.ndarray, image_shape: Sequence[int], detection: Detection) -> np.ndarray:
     """Resize, sanitize, and normalize a saliency map with a bbox-centered fallback."""
+    finalized, _ = _finalize_saliency_map_with_flag(saliency, image_shape, detection)
+    return finalized
+
+
+def _finalize_saliency_map_with_flag(
+    saliency: np.ndarray,
+    image_shape: Sequence[int],
+    detection: Detection,
+) -> tuple[np.ndarray, bool]:
+    """Like _finalize_saliency_map, but also report whether the bbox prior was substituted."""
     saliency = np.asarray(saliency, dtype=np.float32)
     saliency = np.nan_to_num(saliency, nan=0.0, posinf=0.0, neginf=0.0)
 
@@ -414,9 +455,11 @@ def _finalize_saliency_map(saliency: np.ndarray, image_shape: Sequence[int], det
         saliency = cv2.resize(saliency, (target_width, target_height), interpolation=cv2.INTER_LINEAR)
 
     saliency = XAIExplainer.normalize_saliency(saliency)
+    is_fallback = False
     if float(saliency.max()) <= 0.0:
         saliency = _bbox_prior_map((target_height, target_width), detection)
-    return saliency.astype(np.float32)
+        is_fallback = True
+    return saliency.astype(np.float32), is_fallback
 
 
 def _renormalize_in_bbox(

@@ -14,8 +14,8 @@ from .base import (
     SaliencyMap,
     XAIExplainer,
     _extract_matching_confidence_from_output,
-    _finalize_saliency_map,
-    _forward_detector,
+    _finalize_saliency_map_with_flag,
+    _forward_detector_batch,
 )
 
 if TYPE_CHECKING:
@@ -136,15 +136,18 @@ class DCLOSEExplainer(XAIExplainer):
             all_masks = [np.ones(image.shape[:2], dtype=np.float32)]
 
         scores: list[float] = []
+        # Use 114 fill (YOLOX letterbox padding value) for masked regions
+        # rather than 0 (black), which is inconsistent with training distribution
+        fill_value = 114  # YOLOX-S letterbox pad; acceptable neutral for FRCNN too
         for batch_start in range(0, len(all_masks), batch_size):
             mask_batch = all_masks[batch_start : batch_start + batch_size]
+            masked_images = []
             for mask in mask_batch:
-                # Use 114 fill (YOLOX letterbox padding value) for masked regions
-                # rather than 0 (black), which is inconsistent with training distribution
-                fill_value = 114  # YOLOX-S letterbox pad; acceptable neutral for FRCNN too
                 masked_image = image.copy()
                 masked_image[mask == 0] = fill_value
-                output, _, meta = _forward_detector(model, masked_image, require_grad=False)
+                masked_images.append(masked_image)
+            # One forward per batch; per-image outputs are scored exactly as before.
+            for output, meta in _forward_detector_batch(model, masked_images):
                 matched_confidence, matched_iou = _extract_matching_confidence_from_output(
                     output=output,
                     detection=detection,
@@ -160,7 +163,7 @@ class DCLOSEExplainer(XAIExplainer):
         saliency = (scores_array[:, None, None] * masks_array).sum(axis=0)
         density = masks_array.sum(axis=0) + 1e-8
         saliency = saliency / density
-        saliency = _finalize_saliency_map(saliency, image.shape[:2], detection)
+        saliency, is_fallback = _finalize_saliency_map_with_flag(saliency, image.shape[:2], detection)
 
         gc.collect()
         return SaliencyMap(
@@ -168,6 +171,8 @@ class DCLOSEExplainer(XAIExplainer):
             method_name="dclose",
             computation_time=float(time.time() - t_start),
             detection_id=detection.detection_id,
+            is_fallback=is_fallback,
+            fallback_reason="zero_map" if is_fallback else None,
         )
 
 

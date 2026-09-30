@@ -16,6 +16,7 @@ from .base import (
     XAIExplainer,
     _extract_target_score_from_output,
     _finalize_saliency_map,
+    _finalize_saliency_map_with_flag,
     _forward_detector_from_tensor,
     _prepare_model_input,
     _require_torch,
@@ -70,6 +71,8 @@ class GCAMEExplainer(XAIExplainer):
 
         activations: dict[str, Any] = {}
         gradients: dict[str, Any] = {}
+        is_fallback = False
+        fallback_reason: str | None = None
 
         def _forward_hook(_module: Any, _inputs: Any, output: Any) -> None:
             activations["value"] = output
@@ -120,7 +123,9 @@ class GCAMEExplainer(XAIExplainer):
                 )
                 cam_np = cam_np * gaussian
 
-            cam_np = _finalize_saliency_map(cam_np, image.shape[:2], detection)
+            cam_np, is_fallback = _finalize_saliency_map_with_flag(cam_np, image.shape[:2], detection)
+            if is_fallback:
+                fallback_reason = "zero_map"
         except Exception as exc:
             logger.warning(
                 "GCAME failed for detection %s; falling back to bbox prior. Error: %s",
@@ -128,6 +133,8 @@ class GCAMEExplainer(XAIExplainer):
                 exc,
             )
             cam_np = _finalize_saliency_map(np.zeros(image.shape[:2], dtype=np.float32), image.shape[:2], detection)
+            is_fallback = True
+            fallback_reason = f"exception: {type(exc).__name__}"
         finally:
             handle_fwd.remove()
             handle_bwd.remove()
@@ -140,4 +147,6 @@ class GCAMEExplainer(XAIExplainer):
             method_name="gcame",
             computation_time=float(time.time() - t_start),
             detection_id=detection.detection_id,
+            is_fallback=is_fallback,
+            fallback_reason=fallback_reason,
         )

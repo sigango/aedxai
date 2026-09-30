@@ -4,6 +4,8 @@ AED-XAI is a research pipeline for **closed-loop, auto-explainable object detect
 
 The core idea is simple but powerful: explanation quality depends on context. A small high-confidence object in a clean scene may be best served by G-CAME, while a low-confidence object in clutter may need a slower but more faithful perturbation method such as D-CLOSE. AED-XAI learns this selection offline from oracle labels and uses it online from pre-explanation features only.
 
+> **v2 direction (2026-09): explanations as evidence.** Under the annotation-free composite, per-detection method selection has almost no headroom (+0.003 over always-G-CAME; see `RESULTS_AND_PLAN.md`, Part A). The v2 experiments instead test whether explanation evidence (perturbation curves, cross-explainer agreement, VLM checks of salient regions) verifies detections beyond output and gradient uncertainty, scored against ground truth. They also audit the metrics themselves with model-free controls and a box-relative faithfulness protocol. The runbook is [`RESULTS_AND_PLAN.md`](RESULTS_AND_PLAN.md), Part B; the v1 pipeline below is kept as a baseline.
+
 ## Pipeline
 
 ```text

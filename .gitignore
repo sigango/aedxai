@@ -23,3 +23,11 @@ wandb/
 runs/
 tensorboard/
 
+
+# Cluster runtime (per-user settings and job logs)
+cluster/cluster.env
+cluster/*.env
+logs/
+
+# macOS
+.DS_Store

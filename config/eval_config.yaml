@@ -10,6 +10,17 @@ evaluation:
       num_steps: 10                    # K = [10%, 20%, ..., 100%]
       baseline_method: "blur"          # Options: "blur", "mean", "black"
       blur_kernel_size: 51             # For blur baseline
+      # Detector forwards per batch when scoring perturbation steps. 1 = legacy
+      # one-image-at-a-time path; >1 gives the same values faster on GPU.
+      batch_size: 1
+    # Box-relative insertion/deletion (evaluate_evidence only; not in the composite).
+    # Pixels are ranked and perturbed only inside the detection box scaled by
+    # context_scale; everything outside stays original, so each step is a fixed
+    # fraction of the object's neighbourhood instead of 10% of the whole image.
+    over_all_box:
+      enabled: true
+      num_steps: 10
+      context_scale: 2.0
     sparsity:
       enabled: true
       method: "gini"                   # Options: "gini", "max_over_mean" (ODExAI uses max/mean)
@@ -41,6 +52,29 @@ evaluation:
     nms_thresh_range: [0.30, 0.70]
     # Early stopping: stop if improvement < this between iterations
     min_improvement: 0.01
+    # Method-independent VLM false-positive filtering (skip explaining boxes
+    # the VLM flags as false positives). For fair comparison this must be
+    # applied to EVERY method's evaluation population, so it defaults to off.
+    vlm_fp_filter: false
+    # When set (e.g. "gcame"), every detection uses this method and the selector
+    # is bypassed. Combine with escalation to run the G-CAME -> backup cascade.
+    fixed_method: null
+    # Evaluate-then-escalate cascade: when a detection's composite falls below
+    # tau, run the backup method and keep the better-scoring map (keep-max never
+    # decreases the selection metric for the same detections).
+    # Opt-in: enable per run (run_experiments.py --escalation on).
+    # tau is calibrated OFFLINE per detector with scripts/calibrate_tau.py on a
+    # calibration split disjoint from every test manifest, then frozen here.
+    # The values below are PROVISIONAL: p30 of G-CAME composites on the old
+    # selector-training rows, which overlap 202 headline test images. Replace
+    # them with the calibrate_tau.py output before any reported cascade run.
+    escalation:
+      enabled: false
+      backup_method: "lime"
+      tau: 0.6546                      # fallback when a detector has no entry below
+      tau_by_detector:
+        yolox-s: 0.6546
+        fasterrcnn_resnet50_fpn_v2: 0.6922
 
 # Experiment settings
 experiments:

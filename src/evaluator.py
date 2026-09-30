@@ -16,6 +16,7 @@ from .xai_methods.base import (
     SaliencyMap,
     _extract_candidates_from_output,
     _forward_detector,
+    _forward_detector_batch,
     _iou_to_target,
 )
 
@@ -148,6 +149,7 @@ class AutoEvaluator:
             self.composite_weights["ebpg"] = self.composite_weights.pop("pg")
 
         self.over_all_config = dict(self.metrics_config.get("over_all", {}))
+        self.box_protocol_config = dict(self.metrics_config.get("over_all_box", {}))
         self.sparsity_config = dict(self.metrics_config.get("sparsity", {}))
 
     def pointing_game(self, saliency_map: np.ndarray, bbox: list[int]) -> float:
@@ -189,7 +191,32 @@ class AutoEvaluator:
     ) -> tuple[float, float]:
         """Compute insertion and deletion AUCs via repeated detector forward passes."""
         del bbox
+        curves = self.insertion_deletion_curves(
+            saliency_map=saliency_map,
+            model=model,
+            image=image,
+            detection=detection,
+        )
+        return curves["insertion_auc"], curves["deletion_auc"]
 
+    def insertion_deletion_curves(
+        self,
+        saliency_map: np.ndarray,
+        model: "torch.nn.Module" | Any,
+        image: np.ndarray,
+        detection: "Detection",
+        region: tuple[int, int, int, int] | None = None,
+        num_steps: int | None = None,
+        batch_size: int | None = None,
+    ) -> dict[str, Any]:
+        """Return insertion/deletion AUCs together with the full confidence curves.
+
+        With ``region=None`` this is the paper-facing global protocol: all image
+        pixels are ranked by saliency and moved in ``num_steps`` equal blocks.
+        With ``region=(x1, y1, x2, y2)`` only pixels inside that region are ranked
+        and perturbed; everything outside keeps its original value, so each step
+        is a fixed fraction of the region rather than of the whole image.
+        """
         saliency = _coerce_saliency_array(saliency_map)
         image = np.asarray(image, dtype=np.uint8)
         if image.ndim != 3 or image.shape[:2] != saliency.shape:
@@ -197,36 +224,74 @@ class AutoEvaluator:
                 f"image shape {image.shape} is incompatible with saliency map shape {saliency.shape}"
             )
 
-        steps = max(1, int(self.over_all_config.get("num_steps", 10)))
+        steps = max(1, int(num_steps if num_steps is not None else self.over_all_config.get("num_steps", 10)))
+        batch = max(1, int(batch_size if batch_size is not None else self.over_all_config.get("batch_size", 1)))
         baseline = self._create_baseline_image(image)
-        flat_indices = np.argsort(saliency.reshape(-1))[::-1]
-        pixel_groups = np.array_split(flat_indices, steps)
+
+        if region is None:
+            order = np.argsort(saliency.reshape(-1))[::-1]
+            insertion_start = baseline
+        else:
+            x1, y1, x2, y2 = region
+            region_indices = (
+                np.arange(saliency.size).reshape(saliency.shape)[y1 : y2 + 1, x1 : x2 + 1].reshape(-1)
+            )
+            region_scores = saliency.reshape(-1)[region_indices]
+            order = region_indices[np.argsort(region_scores)[::-1]]
+            insertion_start = image.copy().reshape(-1, 3)
+            insertion_start[region_indices] = baseline.reshape(-1, 3)[region_indices]
+            insertion_start = insertion_start.reshape(image.shape)
+
+        pixel_groups = np.array_split(order, steps)
+        insertion_images = self._cumulative_step_images(insertion_start, image, pixel_groups)
+        deletion_images = self._cumulative_step_images(image, baseline, pixel_groups)
+
+        insertion_scores = self._get_detection_confidences(model, insertion_images, detection, batch)
+        deletion_scores = self._get_detection_confidences(model, deletion_images, detection, batch)
+
         x_coords = np.linspace(0.0, 1.0, steps + 1, dtype=np.float32)
-
-        insertion_scores: list[float] = []
-        current_insertion = baseline.copy()
-        for step_index in range(steps + 1):
-            insertion_scores.append(self._get_detection_confidence(model, current_insertion, detection))
-            if step_index >= steps:
-                continue
-            for flat_index in pixel_groups[step_index]:
-                y_coord, x_coord = np.unravel_index(int(flat_index), saliency.shape)
-                current_insertion[y_coord, x_coord] = image[y_coord, x_coord]
-
-        deletion_scores: list[float] = []
-        current_deletion = image.copy()
-        for step_index in range(steps + 1):
-            deletion_scores.append(self._get_detection_confidence(model, current_deletion, detection))
-            if step_index >= steps:
-                continue
-            for flat_index in pixel_groups[step_index]:
-                y_coord, x_coord = np.unravel_index(int(flat_index), saliency.shape)
-                current_deletion[y_coord, x_coord] = baseline[y_coord, x_coord]
-
         trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
         insertion_auc = float(np.clip(trapz(insertion_scores, x_coords), 0.0, 1.0))
         deletion_auc = float(np.clip(trapz(deletion_scores, x_coords), 0.0, 1.0))
-        return insertion_auc, deletion_auc
+        return {
+            "insertion_auc": insertion_auc,
+            "deletion_auc": deletion_auc,
+            "insertion_curve": [float(value) for value in insertion_scores],
+            "deletion_curve": [float(value) for value in deletion_scores],
+        }
+
+    @staticmethod
+    def _cumulative_step_images(
+        start: np.ndarray,
+        source: np.ndarray,
+        pixel_groups: list[np.ndarray],
+    ) -> list[np.ndarray]:
+        """Return [start, start+group0, start+group0+group1, ...] copying pixels from source."""
+        current = start.copy().reshape(-1, start.shape[-1])
+        source_flat = source.reshape(-1, source.shape[-1])
+        images = [current.reshape(start.shape).copy()]
+        for group in pixel_groups:
+            current[group] = source_flat[group]
+            images.append(current.reshape(start.shape).copy())
+        return images
+
+    def _get_detection_confidences(
+        self,
+        model: "torch.nn.Module" | Any,
+        images: list[np.ndarray],
+        detection: "Detection",
+        batch_size: int,
+    ) -> list[float]:
+        """Score a list of perturbed images, batching forwards when batch_size > 1."""
+        if batch_size <= 1:
+            return [self._get_detection_confidence(model, current, detection) for current in images]
+
+        raw_model = _unwrap_model(model)
+        scores: list[float] = []
+        for start in range(0, len(images), batch_size):
+            for output, meta in _forward_detector_batch(raw_model, images[start : start + batch_size]):
+                scores.append(self._match_confidence(raw_model, output, meta, detection))
+        return scores
 
     def _get_detection_confidence(
         self,
@@ -237,6 +302,16 @@ class AutoEvaluator:
         """Find the confidence of the best-matching detection in a perturbed image."""
         raw_model = _unwrap_model(model)
         output, _, meta = _forward_detector(raw_model, image, require_grad=False)
+        return self._match_confidence(raw_model, output, meta, original_detection)
+
+    @staticmethod
+    def _match_confidence(
+        raw_model: Any,
+        output: Any,
+        meta: Mapping[str, Any],
+        original_detection: "Detection",
+    ) -> float:
+        """Confidence of the same-class output box with IoU > 0.5 to the original, else 0."""
         boxes, scores, class_ids = _extract_candidates_from_output(output, model=raw_model, meta=meta)
         if boxes.numel() == 0:
             return 0.0
@@ -383,6 +458,102 @@ class AutoEvaluator:
         """Compatibility wrapper that forwards to evaluate_all."""
         bbox = detection.bbox if hasattr(detection, "bbox") else None
         return self.evaluate_all(saliency_map=saliency_map, bbox=bbox, model=model, image=image, detection=detection)
+
+    def expanded_box_region(
+        self,
+        bbox: list[int],
+        image_shape: tuple[int, ...],
+        context_scale: float | None = None,
+    ) -> tuple[int, int, int, int]:
+        """Return the detection box scaled by ``context_scale`` about its centre, clipped to the image."""
+        scale = float(
+            context_scale if context_scale is not None else self.box_protocol_config.get("context_scale", 2.0)
+        )
+        height, width = int(image_shape[0]), int(image_shape[1])
+        x1, y1, x2, y2 = [float(value) for value in bbox]
+        cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+        half_w = max(1.0, (x2 - x1) * scale / 2.0)
+        half_h = max(1.0, (y2 - y1) * scale / 2.0)
+        return (
+            int(max(0, np.floor(cx - half_w))),
+            int(max(0, np.floor(cy - half_h))),
+            int(min(width - 1, np.ceil(cx + half_w))),
+            int(min(height - 1, np.ceil(cy + half_h))),
+        )
+
+    def evaluate_evidence(
+        self,
+        saliency_map: np.ndarray | SaliencyMap | Any,
+        detection: "Detection",
+        model: "torch.nn.Module" | Any,
+        image: np.ndarray,
+        gt_bbox: list[int] | None = None,
+        include_box_protocol: bool | None = None,
+    ) -> dict[str, Any]:
+        """Extended evaluation used by the evidence/audit experiments.
+
+        Returns every paper-facing metric of ``evaluate_all`` (same definitions and
+        composite), the insertion/deletion curves, the box-relative protocol
+        (``*_box``: steps are fractions of the context-expanded detection box,
+        pixels outside it stay original), and PG/EBPG against an annotated box
+        when ``gt_bbox`` is given. It does not change ``evaluate_all``.
+        """
+        t_start = time.time()
+        saliency = _coerce_saliency_array(saliency_map)
+        bbox = [int(value) for value in detection.bbox]
+
+        global_curves = self.insertion_deletion_curves(saliency, model, image, detection)
+        ebpg = self.energy_based_pg(saliency, bbox)
+        sparsity = self.sparsity_gini(saliency)
+        oa = global_curves["insertion_auc"] - global_curves["deletion_auc"]
+        record: dict[str, Any] = {
+            "pg": self.pointing_game(saliency, bbox),
+            "ebpg": ebpg,
+            "oa": float(oa),
+            "insertion_auc": global_curves["insertion_auc"],
+            "deletion_auc": global_curves["deletion_auc"],
+            "sparsity": sparsity,
+            "composite": self.composite_score({"ebpg": ebpg, "oa": oa, "sparsity": sparsity}),
+            "insertion_curve": global_curves["insertion_curve"],
+            "deletion_curve": global_curves["deletion_curve"],
+        }
+
+        use_box = (
+            bool(self.box_protocol_config.get("enabled", True))
+            if include_box_protocol is None
+            else bool(include_box_protocol)
+        )
+        if use_box:
+            region = self.expanded_box_region(bbox, saliency.shape)
+            box_curves = self.insertion_deletion_curves(
+                saliency,
+                model,
+                image,
+                detection,
+                region=region,
+                num_steps=int(self.box_protocol_config.get("num_steps", self.over_all_config.get("num_steps", 10))),
+            )
+            oa_box = box_curves["insertion_auc"] - box_curves["deletion_auc"]
+            record.update(
+                {
+                    "oa_box": float(oa_box),
+                    "insertion_auc_box": box_curves["insertion_auc"],
+                    "deletion_auc_box": box_curves["deletion_auc"],
+                    "insertion_curve_box": box_curves["insertion_curve"],
+                    "deletion_curve_box": box_curves["deletion_curve"],
+                    # Sensitivity variant only; the paper-facing composite is "composite".
+                    "composite_box": self.composite_score({"ebpg": ebpg, "oa": oa_box, "sparsity": sparsity}),
+                    "box_region": [int(value) for value in region],
+                }
+            )
+
+        if gt_bbox is not None:
+            gt_box = [int(value) for value in gt_bbox]
+            record["pg_gt"] = self.pointing_game(saliency, gt_box)
+            record["ebpg_gt"] = self.energy_based_pg(saliency, gt_box)
+
+        record["eval_time"] = float(time.time() - t_start)
+        return record
 
     def _create_baseline_image(self, image: np.ndarray) -> np.ndarray:
         """Create the perturbation baseline image from the evaluator config."""

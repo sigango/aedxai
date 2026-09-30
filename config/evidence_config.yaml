@@ -1,0 +1,61 @@
+# Explanation-as-evidence experiments (scripts/run_evidence.py and friends).
+# The paper-facing metric definitions stay in eval_config.yaml; this file only
+# chooses what to compute and store for each detection.
+evidence:
+  # Highest-confidence detections per image that get explanations. The rest are
+  # still stored with output features and GT labels, so AP can be re-scored.
+  max_explained_per_image: 20
+  # Detector confidence threshold for the evidence run; null = detector_config.yaml.
+  conf_thresh: null
+
+  # Explanation methods (xai_config.yaml sections; *_raw = bbox conditioning removed).
+  methods: [gcame, gcame_raw, gradcam, gradcam_raw, lime, dclose]
+  # Model-free controls scored with the same evaluator.
+  controls: [bbox_prior, center_prior, random]
+  # Pixel-shuffled copies of these maps (same histogram and Gini, no layout).
+  shuffled_of: [gcame, gcame_raw]
+  # Map pairs whose agreement becomes an evidence feature.
+  agreement_pairs:
+    - [gcame_raw, lime]
+    - [gcame_raw, dclose]
+    - [lime, dclose]
+    - [gradcam_raw, gcame_raw]
+    - [gcame, gcame_raw]
+
+  # Riedlinger-style gradient features (one extra forward+backward per detection).
+  gradient_features: true
+  # D-CLOSE mask budget: false = num_masks_dev (200), true = num_masks_final (2000).
+  dclose_final_masks: false
+
+  # Detection-to-GT matching (COCO style).
+  gt_iou_threshold: 0.5
+
+  # Evaluator forward batch for perturbation steps (same values as batch 1).
+  evaluator_batch_size: 11
+  # Compute the box-relative insertion/deletion protocol as well.
+  box_protocol: true
+
+  # Saliency maps saved for the VLM pass and qualitative figures.
+  save_maps_for: [gcame, gcame_raw, lime, dclose]
+  map_downsample: 2              # store every 2nd pixel per side (float16, compressed)
+
+vlm_verification:
+  # P(yes) that the box crop shows the detected class.
+  box: true
+  # P(yes) that the salient pixels of these maps show the detected class.
+  saliency_methods: [gcame_raw, lime]
+  box_context_scale: 1.3
+  salient_box_multiple: 2.0
+  min_image_fraction: 0.01
+
+analysis:
+  cv_folds: 5
+  bootstrap_samples: 2000
+  seed: 0
+  # Gate G1: explanation features must add at least this much AUROC over the
+  # output+gradient baseline, with the paired-bootstrap 95% CI excluding 0.
+  gate_delta_auroc: 0.02
+  # Conformal risk control targets: expected fraction of accepted false positives.
+  crc_alpha: [0.05, 0.10]
+  # Budgets (fraction of explained detections that get the expensive evidence tier).
+  acquisition_budgets: [0.0, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0]

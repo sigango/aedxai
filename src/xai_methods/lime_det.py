@@ -14,8 +14,8 @@ from .base import (
     SaliencyMap,
     XAIExplainer,
     _extract_matching_confidence_from_output,
-    _finalize_saliency_map,
-    _forward_detector,
+    _finalize_saliency_map_with_flag,
+    _forward_detector_batch,
 )
 
 if TYPE_CHECKING:
@@ -96,13 +96,16 @@ class LIMEExplainer(XAIExplainer):
         fill_value = 114
         for batch_start in range(0, num_perturbations, batch_size):
             batch = perturbation_matrix[batch_start : batch_start + batch_size]
+            masked_images = []
             for row in batch:
                 selected_superpixels = np.where(row == 1)[0]
                 mask = np.isin(segments, selected_superpixels)
                 masked_image = image.copy()
                 masked_image[~mask] = fill_value
+                masked_images.append(masked_image)
 
-                output, _, meta = _forward_detector(model, masked_image, require_grad=False)
+            # One forward per batch; per-image outputs are scored exactly as before.
+            for output, meta in _forward_detector_batch(model, masked_images):
                 matched_confidence, _ = _extract_matching_confidence_from_output(
                     output=output,
                     detection=detection,
@@ -133,13 +136,15 @@ class LIMEExplainer(XAIExplainer):
         for superpixel_id in range(n_superpixels):
             saliency[segments == superpixel_id] = max(float(importance[superpixel_id]), 0.0)
 
-        saliency = _finalize_saliency_map(saliency, image.shape[:2], detection)
+        saliency, is_fallback = _finalize_saliency_map_with_flag(saliency, image.shape[:2], detection)
         gc.collect()
         return SaliencyMap(
             map=saliency,
             method_name="lime",
             computation_time=float(time.time() - t_start),
             detection_id=detection.detection_id,
+            is_fallback=is_fallback,
+            fallback_reason="zero_map" if is_fallback else None,
         )
 
 

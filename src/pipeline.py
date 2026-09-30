@@ -6,7 +6,7 @@ import gc
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Mapping
 
 import numpy as np
 import yaml
@@ -52,6 +52,32 @@ class PipelineResult:
     selector_reasoning: dict[int, dict[str, Any]] = field(default_factory=dict)
 
 
+class _NullVLMJudge:
+    """Stand-in used when the VLM is disabled: returns no assessments.
+
+    The feedback loop then derives scene complexity from detector statistics,
+    which is also how the selector's training feature is computed.
+    """
+
+    def assess_detections(self, image: np.ndarray, detections: list["Detection"]) -> list[Any]:
+        del image, detections
+        return []
+
+    def unload_model(self) -> None:
+        return None
+
+
+def _deep_merge(base: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
+    """Recursively merge ``overrides`` into a copy of ``base``."""
+    merged = dict(base)
+    for key, value in overrides.items():
+        if isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 class AEDXAIPipeline:
     """High-level coordinator for detection, judging, explanation, and feedback."""
 
@@ -62,6 +88,8 @@ class AEDXAIPipeline:
         xai_config_path: str,
         eval_config_path: str,
         detector_model_name: str | None = None,
+        feedback_overrides: Mapping[str, Any] | None = None,
+        use_vlm: bool = True,
     ) -> None:
         """Initialize the pipeline from its configuration file paths.
 
@@ -69,12 +97,18 @@ class AEDXAIPipeline:
             detector_model_name: Override which detector family to load. Supported values:
                 "yolox-s", "fasterrcnn_resnet50_fpn_v2". If None, uses
                 detector_config.yaml:detector.primary.name.
+            feedback_overrides: Keys deep-merged over eval_config.yaml:evaluation.feedback
+                (e.g. {"max_iterations": 1, "escalation": {"enabled": False}}).
+            use_vlm: When False the VLM is not loaded and scene complexity comes
+                from detector statistics.
         """
         self.detector_config_path = str(detector_config_path)
         self.vlm_config_path = str(vlm_config_path)
         self.xai_config_path = str(xai_config_path)
         self.eval_config_path = str(eval_config_path)
         self.detector_model_name = detector_model_name
+        self.feedback_overrides = dict(feedback_overrides or {})
+        self.use_vlm = bool(use_vlm)
 
         self.detector: DetectorWrapper | None = None
         self.vlm_judge: VLMJudge | None = None
@@ -114,15 +148,19 @@ class AEDXAIPipeline:
             logger.info("Loaded detector model: %s", model_name)
 
         if self.vlm_judge is None:
-            self.vlm_judge = VLMJudge(config_path=self.vlm_config_path)
-            self.vlm_judge.load_model()
-            logger.info("VLM Judge loaded and resident in VRAM.")
+            if self.use_vlm:
+                self.vlm_judge = VLMJudge(config_path=self.vlm_config_path)
+                self.vlm_judge.load_model()
+                logger.info("VLM Judge loaded and resident in VRAM.")
+            else:
+                self.vlm_judge = _NullVLMJudge()
+                logger.info("VLM disabled; scene complexity will come from detector statistics.")
 
         if self.evaluator is None:
             self.evaluator = AutoEvaluator(config_path=self.eval_config_path)
 
         if self.feedback_loop is None:
-            self.feedback_loop = FeedbackLoop(config_path=self.eval_config_path)
+            self.feedback_loop = FeedbackLoop(config_path=self.feedback_config())
 
         if self.xai_selector is None:
             # Selector features include detector-specific signals (bbox stats, scene complexity),
@@ -195,6 +233,7 @@ class AEDXAIPipeline:
                 metadata={
                     "iterations": len(feedback_result.iterations),
                     "converged": feedback_result.converged,
+                    "escalations": int(getattr(feedback_result, "num_escalations", 0)),
                 },
                 selector_reasoning=dict(feedback_result.final_selector_reasoning),
             )
@@ -289,6 +328,12 @@ class AEDXAIPipeline:
             if candidate.exists():
                 return candidate
         return candidates[0]
+
+    def feedback_config(self) -> dict[str, Any]:
+        """Effective feedback config: eval_config.yaml feedback section plus overrides."""
+        raw = self._load_yaml(self.eval_config_path)
+        feedback = dict(dict(raw.get("evaluation", raw)).get("feedback", {}))
+        return _deep_merge(feedback, self.feedback_overrides)
 
     def _load_yaml(self, path: str) -> dict[str, Any]:
         """Load a YAML file into a dictionary."""

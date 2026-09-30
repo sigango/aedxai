@@ -1,0 +1,875 @@
+% refs.bib -- AED-XAI paper bibliography.
+% Verified 2026-09-29. Venue metadata from DBLP (official SPARQL endpoint,
+% sparql.dblp.org; the dblp.org web/BibTeX pages are behind a bot check),
+% arXiv (abs pages + export API), and CVF Open Access (CVPR 2026 papers).
+% Years/pages follow the DBLP record of the published version.
+
+% ---------------------------------------------------------------------------
+% Saliency / attribution methods (classification and object detection)
+% ---------------------------------------------------------------------------
+
+@inproceedings{selvaraju2017gradcam,
+  author    = {Ramprasaath R. Selvaraju and
+               Michael Cogswell and
+               Abhishek Das and
+               Ramakrishna Vedantam and
+               Devi Parikh and
+               Dhruv Batra},
+  title     = {{Grad-CAM}: Visual Explanations from Deep Networks via Gradient-Based Localization},
+  booktitle = {{IEEE} International Conference on Computer Vision, {ICCV} 2017, Venice, Italy, October 22-29, 2017},
+  pages     = {618--626},
+  publisher = {{IEEE} Computer Society},
+  year      = {2017},
+  doi       = {10.1109/ICCV.2017.74}
+}
+
+@inproceedings{ribeiro2016lime,
+  author    = {Marco T{\'{u}}lio Ribeiro and
+               Sameer Singh and
+               Carlos Guestrin},
+  title     = {``Why Should {I} Trust You?'': Explaining the Predictions of Any Classifier},
+  booktitle = {Proceedings of the 22nd {ACM} {SIGKDD} International Conference on Knowledge Discovery and Data Mining, San Francisco, CA, USA, August 13-17, 2016},
+  pages     = {1135--1144},
+  publisher = {{ACM}},
+  year      = {2016},
+  doi       = {10.1145/2939672.2939778}
+}
+
+@inproceedings{petsiuk2018rise,
+  author    = {Vitali Petsiuk and
+               Abir Das and
+               Kate Saenko},
+  title     = {{RISE}: Randomized Input Sampling for Explanation of Black-box Models},
+  booktitle = {British Machine Vision Conference 2018, {BMVC} 2018, Newcastle, UK, September 3-6, 2018},
+  pages     = {151},
+  publisher = {{BMVA} Press},
+  year      = {2018},
+  url       = {http://bmvc2018.org/contents/papers/1064.pdf}
+}
+
+@inproceedings{petsiuk2021drise,
+  author    = {Vitali Petsiuk and
+               Rajiv Jain and
+               Varun Manjunatha and
+               Vlad I. Morariu and
+               Ashutosh Mehra and
+               Vicente Ordonez and
+               Kate Saenko},
+  title     = {Black-Box Explanation of Object Detectors via Saliency Maps},
+  booktitle = {{IEEE} Conference on Computer Vision and Pattern Recognition, {CVPR} 2021, virtual, June 19-25, 2021},
+  pages     = {11443--11452},
+  publisher = {Computer Vision Foundation / {IEEE}},
+  year      = {2021},
+  doi       = {10.1109/CVPR46437.2021.01128}
+}
+
+@inproceedings{zhao2023odam,
+  author    = {Chenyang Zhao and
+               Antoni B. Chan},
+  title     = {{ODAM}: Gradient-based Instance-Specific Visual Explanations for Object Detection},
+  booktitle = {The Eleventh International Conference on Learning Representations, {ICLR} 2023, Kigali, Rwanda, May 1-5, 2023},
+  publisher = {OpenReview.net},
+  year      = {2023},
+  url       = {https://openreview.net/forum?id=kJWcI39kXY}
+}
+
+% NOTE: venue version is retitled. arXiv:2306.03400 is the 2023 preprint
+% "G-CAME: Gaussian-Class Activation Mapping Explainer for Object Detectors"
+% (5 authors). The Canadian AI 2024 paper below is its published form
+% (arXiv:2404.13417, comment "Canadian AI 2024"; adds author Tuong Phan).
+@inproceedings{nguyen2024gcame,
+  author    = {Quoc Khanh Nguyen and
+               Truong Thanh Hung Nguyen and
+               Vo Thanh Khang Nguyen and
+               Van Binh Truong and
+               Tuong Phan and
+               Quoc Hung Cao},
+  title     = {Efficient and Concise Explanations for Object Detection with {Gaussian}-Class Activation Mapping Explainer},
+  booktitle = {37th Canadian Conference on Artificial Intelligence, Canadian {AI} 2024, Guelph, ON, Canada, May 27-31, 2024, Proceedings},
+  publisher = {Canadian Artificial Intelligence Association},
+  year      = {2024},
+  url       = {https://caiac.pubpub.org/pub/503syl0l}
+}
+
+@inproceedings{truong2023dclose,
+  author    = {Van Binh Truong and
+               Truong Thanh Hung Nguyen and
+               Vo Thanh Khang Nguyen and
+               Quoc Khanh Nguyen and
+               Quoc Hung Cao},
+  title     = {Towards Better Explanations for Object Detection},
+  booktitle = {Asian Conference on Machine Learning, {ACML} 2023, 11-14 November 2023, Istanbul, Turkey},
+  series    = {Proceedings of Machine Learning Research},
+  volume    = {222},
+  pages     = {1385--1400},
+  publisher = {{PMLR}},
+  year      = {2023},
+  url       = {https://proceedings.mlr.press/v222/truong24a.html}
+}
+
+% NOTE: KI 2025 confirmed; DBLP/Springer publication year of LNCS 15956 is 2026.
+@inproceedings{nguyen2025odexai,
+  author    = {Phuc Truong Loc Nguyen and
+               Truong Thanh Hung Nguyen and
+               Hung Cao},
+  title     = {{ODExAI}: A Comprehensive Object Detection Explainable {AI} Evaluation},
+  booktitle = {{KI} 2025: Advances in Artificial Intelligence - 48th German Conference on {AI}, Potsdam, Germany, September 16-19, 2025, Proceedings},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {15956},
+  pages     = {118--133},
+  publisher = {Springer},
+  year      = {2026},
+  doi       = {10.1007/978-3-032-02813-6_9}
+}
+
+% NOTE: arXiv:2212.11409 (2022); published at xAI 2023, so year is 2023.
+@inproceedings{padmanabhan2022dext,
+  author    = {Deepan Chakravarthi Padmanabhan and
+               Paul G. Pl{\"{o}}ger and
+               Octavio Arriaga and
+               Matias Valdenegro-Toro},
+  title     = {{DExT}: Detector Explanation Toolkit},
+  booktitle = {Explainable Artificial Intelligence - First World Conference, {xAI} 2023, Lisbon, Portugal, July 26-28, 2023, Proceedings, Part {II}},
+  series    = {Communications in Computer and Information Science},
+  volume    = {1902},
+  pages     = {433--456},
+  publisher = {Springer},
+  year      = {2023},
+  doi       = {10.1007/978-3-031-44067-0_23}
+}
+
+@inproceedings{padmanabhan2023sanity,
+  author    = {Deepan Chakravarthi Padmanabhan and
+               Paul G. Pl{\"{o}}ger and
+               Octavio Arriaga and
+               Matias Valdenegro-Toro},
+  title     = {Sanity Checks for Saliency Methods Explaining Object Detectors},
+  booktitle = {Explainable Artificial Intelligence - First World Conference, {xAI} 2023, Lisbon, Portugal, July 26-28, 2023, Proceedings, Part {I}},
+  series    = {Communications in Computer and Information Science},
+  volume    = {1901},
+  pages     = {438--455},
+  publisher = {Springer},
+  year      = {2023},
+  doi       = {10.1007/978-3-031-44064-9_23}
+}
+
+@inproceedings{zhang2016excitation,
+  author    = {Jianming Zhang and
+               Zhe Lin and
+               Jonathan Brandt and
+               Xiaohui Shen and
+               Stan Sclaroff},
+  title     = {Top-Down Neural Attention by Excitation Backprop},
+  booktitle = {Computer Vision - {ECCV} 2016 - 14th European Conference, Amsterdam, The Netherlands, October 11-14, 2016, Proceedings, Part {IV}},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {9908},
+  pages     = {543--559},
+  publisher = {Springer},
+  year      = {2016},
+  doi       = {10.1007/978-3-319-46493-0_33}
+}
+
+@inproceedings{wang2020scorecam,
+  author    = {Haofan Wang and
+               Zifan Wang and
+               Mengnan Du and
+               Fan Yang and
+               Zijian Zhang and
+               Sirui Ding and
+               Piotr Mardziel and
+               Xia Hu},
+  title     = {{Score-CAM}: Score-Weighted Visual Explanations for Convolutional Neural Networks},
+  booktitle = {2020 {IEEE/CVF} Conference on Computer Vision and Pattern Recognition, {CVPR} Workshops 2020, Seattle, WA, USA, June 14-19, 2020},
+  pages     = {111--119},
+  publisher = {Computer Vision Foundation / {IEEE}},
+  year      = {2020},
+  doi       = {10.1109/CVPRW50498.2020.00020}
+}
+
+% ---------------------------------------------------------------------------
+% Evaluating explanations / explanation metrics
+% ---------------------------------------------------------------------------
+
+@inproceedings{adebayo2018sanity,
+  author    = {Julius Adebayo and
+               Justin Gilmer and
+               Michael Muelly and
+               Ian J. Goodfellow and
+               Moritz Hardt and
+               Been Kim},
+  title     = {Sanity Checks for Saliency Maps},
+  booktitle = {Advances in Neural Information Processing Systems 31: Annual Conference on Neural Information Processing Systems 2018, NeurIPS 2018, December 3-8, 2018, Montr{\'{e}}al, Canada},
+  pages     = {9525--9536},
+  year      = {2018},
+  url       = {https://proceedings.neurips.cc/paper/2018/hash/294a8ed24b1ad22ec2e7efea049b8737-Abstract.html}
+}
+
+@inproceedings{hooker2019roar,
+  author    = {Sara Hooker and
+               Dumitru Erhan and
+               Pieter-Jan Kindermans and
+               Been Kim},
+  title     = {A Benchmark for Interpretability Methods in Deep Neural Networks},
+  booktitle = {Advances in Neural Information Processing Systems 32: Annual Conference on Neural Information Processing Systems 2019, NeurIPS 2019, December 8-14, 2019, Vancouver, BC, Canada},
+  pages     = {9734--9745},
+  year      = {2019},
+  url       = {https://proceedings.neurips.cc/paper/2019/hash/fe4b8556000d0f0cae99daa5c5c5a410-Abstract.html}
+}
+
+@inproceedings{tomsett2020sanity,
+  author    = {Richard Tomsett and
+               Dan Harborne and
+               Supriyo Chakraborty and
+               Prudhvi Gurram and
+               Alun D. Preece},
+  title     = {Sanity Checks for Saliency Metrics},
+  booktitle = {The Thirty-Fourth {AAAI} Conference on Artificial Intelligence, {AAAI} 2020, The Thirty-Second Innovative Applications of Artificial Intelligence Conference, {IAAI} 2020, The Tenth {AAAI} Symposium on Educational Advances in Artificial Intelligence, {EAAI} 2020, New York, NY, USA, February 7-12, 2020},
+  pages     = {6021--6029},
+  publisher = {{AAAI} Press},
+  year      = {2020},
+  doi       = {10.1609/AAAI.V34I04.6064}
+}
+
+@inproceedings{rong2022road,
+  author    = {Yao Rong and
+               Tobias Leemann and
+               Vadim Borisov and
+               Gjergji Kasneci and
+               Enkelejda Kasneci},
+  title     = {A Consistent and Efficient Evaluation Strategy for Attribution Methods},
+  booktitle = {International Conference on Machine Learning, {ICML} 2022, 17-23 July 2022, Baltimore, Maryland, {USA}},
+  series    = {Proceedings of Machine Learning Research},
+  volume    = {162},
+  pages     = {18770--18795},
+  publisher = {{PMLR}},
+  year      = {2022},
+  url       = {https://proceedings.mlr.press/v162/rong22a.html}
+}
+
+@inproceedings{poppi2021revisiting,
+  author    = {Samuele Poppi and
+               Marcella Cornia and
+               Lorenzo Baraldi and
+               Rita Cucchiara},
+  title     = {Revisiting the Evaluation of Class Activation Mapping for Explainability: A Novel Metric and Experimental Analysis},
+  booktitle = {{IEEE} Conference on Computer Vision and Pattern Recognition Workshops, {CVPR} Workshops 2021, virtual, June 19-25, 2021},
+  pages     = {2299--2304},
+  publisher = {Computer Vision Foundation / {IEEE}},
+  year      = {2021},
+  doi       = {10.1109/CVPRW53098.2021.00260}
+}
+
+% NOTE: published version of arXiv:2305.16361 ("An Experimental Investigation
+% into the Evaluation of Explainability Methods"); the venue title adds
+% "for Computer Vision". ECML PKDD 2023 workshops, proceedings published 2025.
+@inproceedings{stassin2023dummy,
+  author    = {S{\'{e}}drick Stassin and
+               Alexandre Englebert and
+               G{\'{e}}raldin Nanfack and
+               Julien Albert and
+               Nassim Versbraegen and
+               Gilles Peiffer and
+               Miriam Doh and
+               Nicolas Riche and
+               Beno{\^{\i}}t Fr{\'{e}}nay and
+               Christophe De Vleeschouwer},
+  title     = {An Experimental Investigation into the Evaluation of Explainability Methods for Computer Vision},
+  booktitle = {Machine Learning and Principles and Practice of Knowledge Discovery in Databases - International Workshops of {ECML} {PKDD} 2023, Turin, Italy, September 18-22, 2023, Revised Selected Papers, Part {I}},
+  series    = {Communications in Computer and Information Science},
+  volume    = {2133},
+  pages     = {91--106},
+  publisher = {Springer},
+  year      = {2025},
+  doi       = {10.1007/978-3-031-74630-7_7}
+}
+
+@article{bluecher2024occlusion,
+  author    = {Stefan Bluecher and
+               Johanna Vielhaben and
+               Nils Strodthoff},
+  title     = {Decoupling Pixel Flipping and Occlusion Strategy for Consistent {XAI} Benchmarks},
+  journal   = {Trans. Mach. Learn. Res.},
+  volume    = {2024},
+  year      = {2024},
+  url       = {https://openreview.net/forum?id=bIiLXdtUVM}
+}
+
+@inproceedings{rao2022attribution,
+  author    = {Sukrut Rao and
+               Moritz B{\"{o}}hle and
+               Bernt Schiele},
+  title     = {Towards Better Understanding Attribution Methods},
+  booktitle = {{IEEE/CVF} Conference on Computer Vision and Pattern Recognition, {CVPR} 2022, New Orleans, LA, USA, June 18-24, 2022},
+  pages     = {10213--10222},
+  publisher = {{IEEE}},
+  year      = {2022},
+  doi       = {10.1109/CVPR52688.2022.00998}
+}
+
+@article{hedstrom2023quantus,
+  author    = {Anna Hedstr{\"{o}}m and
+               Leander Weber and
+               Daniel Krakowczyk and
+               Dilyara Bareeva and
+               Franz Motzkus and
+               Wojciech Samek and
+               Sebastian Lapuschkin and
+               Marina M.{-}C. H{\"{o}}hne},
+  title     = {{Quantus}: An Explainable {AI} Toolkit for Responsible Evaluation of Neural Network Explanations and Beyond},
+  journal   = {J. Mach. Learn. Res.},
+  volume    = {24},
+  pages     = {34:1--34:11},
+  year      = {2023},
+  url       = {https://jmlr.org/papers/v24/22-0142.html}
+}
+
+@article{hedstrom2023metaquantus,
+  author    = {Anna Hedstr{\"{o}}m and
+               Philine Lou Bommer and
+               Kristoffer Knutsen Wickstr{\o}m and
+               Wojciech Samek and
+               Sebastian Lapuschkin and
+               Marina M.{-}C. H{\"{o}}hne},
+  title     = {The Meta-Evaluation Problem in Explainable {AI}: Identifying Reliable Estimators with {MetaQuantus}},
+  journal   = {Trans. Mach. Learn. Res.},
+  volume    = {2023},
+  year      = {2023},
+  url       = {https://openreview.net/forum?id=j3FK00HyfU}
+}
+
+% NeurIPS 2024 Datasets and Benchmarks Track (per proceedings URL).
+@inproceedings{klein2024latec,
+  author    = {Lukas Klein and
+               Carsten T. L{\"{u}}th and
+               Udo Schlegel and
+               Till J. Bungert and
+               Mennatallah El{-}Assady and
+               Paul F. Jaeger},
+  title     = {Navigating the Maze of Explainable {AI}: A Systematic Approach to Evaluating Methods and Metrics},
+  booktitle = {Advances in Neural Information Processing Systems 37: Annual Conference on Neural Information Processing Systems 2024, NeurIPS 2024, Vancouver, BC, Canada, December 10 - 15, 2024},
+  year      = {2024},
+  url       = {http://papers.nips.cc/paper_files/paper/2024/hash/7beb1ddb04401ba21869f23a77f3e4e1-Abstract-Datasets_and_Benchmarks_Track.html}
+}
+
+@inproceedings{cugny2022autoxai,
+  author    = {Robin Cugny and
+               Julien Aligon and
+               Max Chevalier and
+               Geoffrey Roman{-}Jimenez and
+               Olivier Teste},
+  title     = {{AutoXAI}: A Framework to Automatically Select the Most Adapted {XAI} Solution},
+  booktitle = {Proceedings of the 31st {ACM} International Conference on Information {\&} Knowledge Management, Atlanta, GA, USA, October 17-21, 2022},
+  pages     = {315--324},
+  publisher = {{ACM}},
+  year      = {2022},
+  doi       = {10.1145/3511808.3557247}
+}
+
+% ---------------------------------------------------------------------------
+% Detection quality estimation, uncertainty, calibration, introspection
+% ---------------------------------------------------------------------------
+
+@inproceedings{schubert2021metadetect,
+  author    = {Marius Schubert and
+               Karsten Kahl and
+               Matthias Rottmann},
+  title     = {{MetaDetect}: Uncertainty Quantification and Prediction Quality Estimates for Object Detection},
+  booktitle = {International Joint Conference on Neural Networks, {IJCNN} 2021, Shenzhen, China, July 18-22, 2021},
+  pages     = {1--10},
+  publisher = {{IEEE}},
+  year      = {2021},
+  doi       = {10.1109/IJCNN52387.2021.9534289}
+}
+
+@inproceedings{riedlinger2023gradient,
+  author    = {Tobias Riedlinger and
+               Matthias Rottmann and
+               Marius Schubert and
+               Hanno Gottschalk},
+  title     = {Gradient-Based Quantification of Epistemic Uncertainty for Deep Object Detectors},
+  booktitle = {{IEEE/CVF} Winter Conference on Applications of Computer Vision, {WACV} 2023, Waikoloa, HI, USA, January 2-7, 2023},
+  pages     = {3910--3920},
+  publisher = {{IEEE}},
+  year      = {2023},
+  doi       = {10.1109/WACV56688.2023.00391}
+}
+
+% NOTE: IJCV 2025 journal version (a conference version also appeared at
+% DAGM GCPR 2023, LNCS 14264, pp. 85-99).
+@article{riedlinger2025lmd,
+  author    = {Tobias Riedlinger and
+               Marius Schubert and
+               Sarina Penquitt and
+               Jan{-}Marcel Kezmann and
+               Pascal Colling and
+               Karsten Kahl and
+               Lutz Roese{-}Koerner and
+               Michael Arnold and
+               Urs Zimmermann and
+               Matthias Rottmann},
+  title     = {{LMD}: Light-Weight Prediction Quality Estimation for Object Detection in {Lidar} Point Clouds},
+  journal   = {Int. J. Comput. Vis.},
+  volume    = {133},
+  number    = {7},
+  pages     = {4349--4365},
+  year      = {2025},
+  doi       = {10.1007/S11263-025-02377-8}
+}
+
+@inproceedings{miller2018dropout,
+  author    = {Dimity Miller and
+               Lachlan Nicholson and
+               Feras Dayoub and
+               Niko S{\"{u}}nderhauf},
+  title     = {Dropout Sampling for Robust Object Detection in Open-Set Conditions},
+  booktitle = {2018 {IEEE} International Conference on Robotics and Automation, {ICRA} 2018, Brisbane, Australia, May 21-25, 2018},
+  pages     = {1--7},
+  publisher = {{IEEE}},
+  year      = {2018},
+  doi       = {10.1109/ICRA.2018.8460700}
+}
+
+@inproceedings{lakshminarayanan2017ensembles,
+  author    = {Balaji Lakshminarayanan and
+               Alexander Pritzel and
+               Charles Blundell},
+  title     = {Simple and Scalable Predictive Uncertainty Estimation using Deep Ensembles},
+  booktitle = {Advances in Neural Information Processing Systems 30: Annual Conference on Neural Information Processing Systems 2017, December 4-9, 2017, Long Beach, CA, USA},
+  pages     = {6402--6413},
+  year      = {2017},
+  url       = {https://proceedings.neurips.cc/paper/2017/hash/9ef2ed4b7fd2c810847ffa5fa85bce38-Abstract.html}
+}
+
+% NOTE: ECCV 2024 confirmed; DBLP/Springer publication year of LNCS 15079 is 2025.
+@inproceedings{kuzucu2024calibration,
+  author    = {Selim Kuzucu and
+               Kemal Oksuz and
+               Jonathan Sadeghi and
+               Puneet K. Dokania},
+  title     = {On Calibration of Object Detectors: Pitfalls, Evaluation and Baselines},
+  booktitle = {Computer Vision - {ECCV} 2024 - 18th European Conference, Milan, Italy, September 29-October 4, 2024, Proceedings, Part {XXI}},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {15079},
+  pages     = {185--204},
+  publisher = {Springer},
+  year      = {2025},
+  doi       = {10.1007/978-3-031-72664-4_11}
+}
+
+@inproceedings{oksuz2023saod,
+  author    = {Kemal Oksuz and
+               Tom Joy and
+               Puneet K. Dokania},
+  title     = {Towards Building Self-Aware Object Detectors via Reliable Uncertainty Quantification and Calibration},
+  booktitle = {{IEEE/CVF} Conference on Computer Vision and Pattern Recognition, {CVPR} 2023, Vancouver, BC, Canada, June 17-24, 2023},
+  pages     = {9263--9274},
+  publisher = {{IEEE}},
+  year      = {2023},
+  doi       = {10.1109/CVPR52729.2023.00894}
+}
+
+% NOTE: published in CVPR 2026 Findings (CVF Open Access); not yet in DBLP as
+% a venue paper. arXiv:2605.10190.
+@inproceedings{okazaki2026detrefiner,
+  author    = {Soichiro Okazaki and
+               Tatsuya Sasaki and
+               Hiroki Ohashi},
+  title     = {{DetRefiner}: Model-Agnostic Detection Refinement with Feature Fusion Transformer},
+  booktitle = {Proceedings of the {IEEE/CVF} Conference on Computer Vision and Pattern Recognition ({CVPR}) Findings},
+  month     = jun,
+  year      = {2026},
+  pages     = {6890--6900},
+  url       = {https://openaccess.thecvf.com/content/CVPR2026F/html/Okazaki_DetRefiner_Model-Agnostic_Detection_Refinement_with_Feature_Fusion_Transformer_CVPRF_2026_paper.html}
+}
+
+% arXiv:2508.12082 (ICCV 2025 Oral). Method name: PCR (Prediction Consistency
+% and Reliability).
+@inproceedings{pcr2025,
+  author    = {Seungju Yoo and
+               Hyuk Kwon and
+               Joong{-}Won Hwang and
+               Kibok Lee},
+  title     = {Automated Model Evaluation for Object Detection via Prediction Consistency and Reliability},
+  booktitle = {{IEEE/CVF} International Conference on Computer Vision, {ICCV} 2025, Honolulu, HI, USA, October 19-25, 2025},
+  pages     = {19764--19773},
+  publisher = {{IEEE}},
+  year      = {2025},
+  doi       = {10.1109/ICCV51701.2025.01838}
+}
+
+% NOTE: published version of arXiv:2403.01172 (IEEE T-IV 2024).
+@article{yatbaz2024introspection,
+  author    = {Hakan Yekta Yatbaz and
+               Mehrdad Dianati and
+               Konstantinos Koufos and
+               Roger Woodman},
+  title     = {Run-Time Introspection of {2D} Object Detection in Automated Driving Systems Using Learning Representations},
+  journal   = {{IEEE} Trans. Intell. Veh.},
+  volume    = {9},
+  number    = {6},
+  pages     = {5033--5046},
+  year      = {2024},
+  doi       = {10.1109/TIV.2024.3385531}
+}
+
+% NOTE: arXiv id corrected from 2208.00367 (an unrelated condensed-matter
+% paper) to 2208.13930, which is SAFE (same title and authors).
+@inproceedings{wilson2023safe,
+  author    = {Samuel Wilson and
+               Tobias Fischer and
+               Feras Dayoub and
+               Dimity Miller and
+               Niko S{\"{u}}nderhauf},
+  title     = {{SAFE}: Sensitivity-Aware Features for Out-of-Distribution Object Detection},
+  booktitle = {{IEEE/CVF} International Conference on Computer Vision, {ICCV} 2023, Paris, France, October 1-6, 2023},
+  pages     = {23508--23519},
+  publisher = {{IEEE}},
+  year      = {2023},
+  doi       = {10.1109/ICCV51070.2023.02154}
+}
+
+% ---------------------------------------------------------------------------
+% Explanations / attributions as signals for failure, OOD, adversarial detection
+% ---------------------------------------------------------------------------
+
+% NOTE: MICCAI 2024 workshops (iMIMIC et al.); LNCS 15274 published 2025.
+@inproceedings{spagnolo2024xaimaps,
+  author    = {Federico Spagnolo and
+               Nataliia Molchanova and
+               Mario Ocampo{-}Pineda and
+               Lester Melie{-}Garc{\'{\i}}a and
+               Meritxell Bach Cuadra and
+               Cristina Granziera and
+               Vincent Andrearczyk and
+               Adrien Depeursinge},
+  title     = {Exploiting {XAI} Maps to Improve {MS} Lesion Segmentation and Detection in {MRI}},
+  booktitle = {Medical Image Computing and Computer Assisted Intervention - {MICCAI} 2024 Workshops - {ISIC} 2024, iMIMIC 2024, {EARTH} 2024, DeCaF 2024, Held in Conjunction with {MICCAI} 2024, Marrakesh, Morocco, October 6-10, 2024, Proceedings},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {15274},
+  pages     = {121--131},
+  publisher = {Springer},
+  year      = {2025},
+  doi       = {10.1007/978-3-031-77610-6_12}
+}
+
+@misc{mohseni2019predicting,
+  author        = {Sina Mohseni and
+                   Akshay Jagadeesh and
+                   Zhangyang Wang},
+  title         = {Predicting Model Failure using Saliency Maps in Autonomous Driving Systems},
+  year          = {2019},
+  eprint        = {1905.07679},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+  note          = {Presented at the {ICML} 2019 Workshop on Uncertainty and Robustness in Deep Learning},
+  url           = {https://arxiv.org/abs/1905.07679}
+}
+
+@inproceedings{jha2019abc,
+  author    = {Susmit Jha and
+               Sunny Raj and
+               Steven Lawrence Fernandes and
+               Sumit Kumar Jha and
+               Somesh Jha and
+               Brian Jalaian and
+               Gunjan Verma and
+               Ananthram Swami},
+  title     = {Attribution-Based Confidence Metric For Deep Neural Networks},
+  booktitle = {Advances in Neural Information Processing Systems 32: Annual Conference on Neural Information Processing Systems 2019, NeurIPS 2019, December 8-14, 2019, Vancouver, BC, Canada},
+  pages     = {11826--11837},
+  year      = {2019},
+  url       = {https://proceedings.neurips.cc/paper/2019/hash/bc1ad6e8f86c42a371aff945535baebb-Abstract.html}
+}
+
+@inproceedings{yang2020mlloo,
+  author    = {Puyudi Yang and
+               Jianbo Chen and
+               Cho{-}Jui Hsieh and
+               Jane{-}Ling Wang and
+               Michael I. Jordan},
+  title     = {{ML-LOO}: Detecting Adversarial Examples with Feature Attribution},
+  booktitle = {The Thirty-Fourth {AAAI} Conference on Artificial Intelligence, {AAAI} 2020, The Thirty-Second Innovative Applications of Artificial Intelligence Conference, {IAAI} 2020, The Tenth {AAAI} Symposium on Educational Advances in Artificial Intelligence, {EAAI} 2020, New York, NY, USA, February 7-12, 2020},
+  pages     = {6639--6647},
+  publisher = {{AAAI} Press},
+  year      = {2020},
+  doi       = {10.1609/AAAI.V34I04.6140}
+}
+
+@inproceedings{chen2023gaia,
+  author    = {Jinggang Chen and
+               Junjie Li and
+               Xiaoyang Qu and
+               Jianzong Wang and
+               Jiguang Wan and
+               Jing Xiao},
+  title     = {{GAIA}: Delving into Gradient-based Attribution Abnormality for Out-of-distribution Detection},
+  booktitle = {Advances in Neural Information Processing Systems 36: Annual Conference on Neural Information Processing Systems 2023, NeurIPS 2023, New Orleans, LA, USA, December 10 - 16, 2023},
+  year      = {2023},
+  url       = {http://papers.nips.cc/paper_files/paper/2023/hash/fcdccd419c4dc471fa3b73ec97b53789-Abstract-Conference.html}
+}
+
+@inproceedings{hornauer2023heatmap,
+  author    = {Julia Hornauer and
+               Vasileios Belagiannis},
+  title     = {Heatmap-based Out-of-Distribution Detection},
+  booktitle = {{IEEE/CVF} Winter Conference on Applications of Computer Vision, {WACV} 2023, Waikoloa, HI, USA, January 2-7, 2023},
+  pages     = {2602--2611},
+  publisher = {{IEEE}},
+  year      = {2023},
+  doi       = {10.1109/WACV56688.2023.00263}
+}
+
+@inproceedings{fidel2020shap,
+  author    = {Gil Fidel and
+               Ron Bitton and
+               Asaf Shabtai},
+  title     = {When Explainability Meets Adversarial Learning: Detecting Adversarial Examples using {SHAP} Signatures},
+  booktitle = {2020 International Joint Conference on Neural Networks, {IJCNN} 2020, Glasgow, United Kingdom, July 19-24, 2020},
+  pages     = {1--8},
+  publisher = {{IEEE}},
+  year      = {2020},
+  doi       = {10.1109/IJCNN48605.2020.9207637}
+}
+
+% ---------------------------------------------------------------------------
+% Selective prediction and conformal risk control
+% ---------------------------------------------------------------------------
+
+@inproceedings{hendrycks2017baseline,
+  author    = {Dan Hendrycks and
+               Kevin Gimpel},
+  title     = {A Baseline for Detecting Misclassified and Out-of-Distribution Examples in Neural Networks},
+  booktitle = {5th International Conference on Learning Representations, {ICLR} 2017, Toulon, France, April 24-26, 2017, Conference Track Proceedings},
+  publisher = {OpenReview.net},
+  year      = {2017},
+  url       = {https://openreview.net/forum?id=Hkg4TI9xl}
+}
+
+@inproceedings{geifman2017selective,
+  author    = {Yonatan Geifman and
+               Ran El{-}Yaniv},
+  title     = {Selective Classification for Deep Neural Networks},
+  booktitle = {Advances in Neural Information Processing Systems 30: Annual Conference on Neural Information Processing Systems 2017, December 4-9, 2017, Long Beach, CA, USA},
+  pages     = {4878--4887},
+  year      = {2017},
+  url       = {https://proceedings.neurips.cc/paper/2017/hash/4a8423d5e91fda00bb7e46540e2b0cf1-Abstract.html}
+}
+
+@inproceedings{angelopoulos2024crc,
+  author    = {Anastasios Nikolas Angelopoulos and
+               Stephen Bates and
+               Adam Fisch and
+               Lihua Lei and
+               Tal Schuster},
+  title     = {Conformal Risk Control},
+  booktitle = {The Twelfth International Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024},
+  publisher = {OpenReview.net},
+  year      = {2024},
+  url       = {https://openreview.net/forum?id=33XGfHLtZg}
+}
+
+% NOTE: published version of arXiv:2304.06052 (COPA 2023, PMLR 204).
+@inproceedings{andeol2023conformal,
+  author    = {L{\'{e}}o And{\'{e}}ol and
+               Thomas Fel and
+               Florence de Grancey and
+               Luca Mossina},
+  title     = {Confident Object Detection via Conformal Prediction and Conformal Risk Control: an Application to Railway Signaling},
+  booktitle = {Conformal and Probabilistic Prediction with Applications, 13-15 September 2023, Limassol, Cyprus},
+  series    = {Proceedings of Machine Learning Research},
+  volume    = {204},
+  pages     = {36--55},
+  publisher = {{PMLR}},
+  year      = {2023},
+  url       = {https://proceedings.mlr.press/v204/andeol23a.html}
+}
+
+% arXiv only (no venue version found in DBLP as of 2026-09-29).
+@misc{andeol2025sequential,
+  author        = {L{\'{e}}o And{\'{e}}ol and
+                   Luca Mossina and
+                   Adrien Mazoyer and
+                   S{\'{e}}bastien Gerchinovitz},
+  title         = {Conformal Object Detection by Sequential Risk Control},
+  year          = {2025},
+  eprint        = {2505.24038},
+  archivePrefix = {arXiv},
+  primaryClass  = {stat.ML},
+  url           = {https://arxiv.org/abs/2505.24038}
+}
+
+% ---------------------------------------------------------------------------
+% Vision-language models and VLM-based verification
+% ---------------------------------------------------------------------------
+
+@misc{bai2025qwen25vl,
+  author        = {Shuai Bai and
+                   Keqin Chen and
+                   Xuejing Liu and
+                   Jialin Wang and
+                   Wenbin Ge and
+                   Sibo Song and
+                   Kai Dang and
+                   Peng Wang and
+                   Shijie Wang and
+                   Jun Tang and
+                   others},
+  title         = {{Qwen2.5-VL} Technical Report},
+  year          = {2025},
+  eprint        = {2502.13923},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CV},
+  url           = {https://arxiv.org/abs/2502.13923}
+}
+
+@inproceedings{gu2022vild,
+  author    = {Xiuye Gu and
+               Tsung{-}Yi Lin and
+               Weicheng Kuo and
+               Yin Cui},
+  title     = {Open-vocabulary Object Detection via Vision and Language Knowledge Distillation},
+  booktitle = {The Tenth International Conference on Learning Representations, {ICLR} 2022, Virtual Event, April 25-29, 2022},
+  publisher = {OpenReview.net},
+  year      = {2022},
+  url       = {https://openreview.net/forum?id=lL3lnMbR4WU}
+}
+
+% NOTE: title as printed in the paper (v2/v3). The arXiv metadata title reads
+% "Vison-Language" (typo); v1 and DBLP read "Visual-Language". The task is
+% zero-shot referring expression comprehension via box-wise VLM True/False
+% verification of detector proposals. arXiv only.
+@misc{vlmverify2025,
+  author        = {Jeffrey Liu and
+                   Rongbin Hu},
+  title         = {Zero-Shot Referring Expression Comprehension via Vision-Language True/False Verification},
+  year          = {2025},
+  eprint        = {2509.09958},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CV},
+  url           = {https://arxiv.org/abs/2509.09958}
+}
+
+% ---------------------------------------------------------------------------
+% Detectors, datasets, detection error analysis
+% ---------------------------------------------------------------------------
+
+@misc{ge2021yolox,
+  author        = {Zheng Ge and
+                   Songtao Liu and
+                   Feng Wang and
+                   Zeming Li and
+                   Jian Sun},
+  title         = {{YOLOX}: Exceeding {YOLO} Series in 2021},
+  year          = {2021},
+  eprint        = {2107.08430},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CV},
+  url           = {https://arxiv.org/abs/2107.08430}
+}
+
+@inproceedings{ren2015fasterrcnn,
+  author    = {Shaoqing Ren and
+               Kaiming He and
+               Ross B. Girshick and
+               Jian Sun},
+  title     = {Faster {R-CNN}: Towards Real-Time Object Detection with Region Proposal Networks},
+  booktitle = {Advances in Neural Information Processing Systems 28: Annual Conference on Neural Information Processing Systems 2015, December 7-12, 2015, Montreal, Quebec, Canada},
+  pages     = {91--99},
+  year      = {2015},
+  url       = {https://proceedings.neurips.cc/paper/2015/hash/14bfa6bb14875e45bba028a21ed38046-Abstract.html}
+}
+
+@misc{li2021benchmarking,
+  author        = {Yanghao Li and
+                   Saining Xie and
+                   Xinlei Chen and
+                   Piotr Doll{\'{a}}r and
+                   Kaiming He and
+                   Ross B. Girshick},
+  title         = {Benchmarking Detection Transfer Learning with Vision Transformers},
+  year          = {2021},
+  eprint        = {2111.11429},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CV},
+  url           = {https://arxiv.org/abs/2111.11429}
+}
+
+@inproceedings{lin2014coco,
+  author    = {Tsung{-}Yi Lin and
+               Michael Maire and
+               Serge J. Belongie and
+               James Hays and
+               Pietro Perona and
+               Deva Ramanan and
+               Piotr Doll{\'{a}}r and
+               C. Lawrence Zitnick},
+  title     = {{Microsoft} {COCO}: Common Objects in Context},
+  booktitle = {Computer Vision - {ECCV} 2014 - 13th European Conference, Zurich, Switzerland, September 6-12, 2014, Proceedings, Part {V}},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {8693},
+  pages     = {740--755},
+  publisher = {Springer},
+  year      = {2014},
+  doi       = {10.1007/978-3-319-10602-1_48}
+}
+
+@inproceedings{yu2020bdd100k,
+  author    = {Fisher Yu and
+               Haofeng Chen and
+               Xin Wang and
+               Wenqi Xian and
+               Yingying Chen and
+               Fangchen Liu and
+               Vashisht Madhavan and
+               Trevor Darrell},
+  title     = {{BDD100K}: A Diverse Driving Dataset for Heterogeneous Multitask Learning},
+  booktitle = {2020 {IEEE/CVF} Conference on Computer Vision and Pattern Recognition, {CVPR} 2020, Seattle, WA, USA, June 13-19, 2020},
+  pages     = {2633--2642},
+  publisher = {Computer Vision Foundation / {IEEE}},
+  year      = {2020},
+  doi       = {10.1109/CVPR42600.2020.00271}
+}
+
+@inproceedings{bolya2020tide,
+  author    = {Daniel Bolya and
+               Sean Foley and
+               James Hays and
+               Judy Hoffman},
+  title     = {{TIDE}: A General Toolbox for Identifying Object Detection Errors},
+  booktitle = {Computer Vision - {ECCV} 2020 - 16th European Conference, Glasgow, UK, August 23-28, 2020, Proceedings, Part {III}},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {12348},
+  pages     = {558--573},
+  publisher = {Springer},
+  year      = {2020},
+  doi       = {10.1007/978-3-030-58580-8_33}
+}
+
+@inproceedings{hoiem2012diagnosing,
+  author    = {Derek Hoiem and
+               Yodsawalai Chodpathumwan and
+               Qieyun Dai},
+  title     = {Diagnosing Error in Object Detectors},
+  booktitle = {Computer Vision - {ECCV} 2012 - 12th European Conference on Computer Vision, Florence, Italy, October 7-13, 2012, Proceedings, Part {III}},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {7574},
+  pages     = {340--353},
+  publisher = {Springer},
+  year      = {2012},
+  doi       = {10.1007/978-3-642-33712-3_25}
+}
+
+% NOTE: key kept as requested, but the paper is by Sharma et al. and
+% appeared at CVPR 2026 (Highlight), not 2023. arXiv:2605.10349. Metadata
+% from CVF Open Access (not yet in DBLP as a venue paper).
+@inproceedings{sharma2026portable,
+  author    = {Rashi Sharma and
+               Justin Timothy C. Bersamin and
+               Karthikk Subramanian},
+  title     = {Portable Active Learning for Object Detection},
+  booktitle = {Proceedings of the {IEEE/CVF} Conference on Computer Vision and Pattern Recognition ({CVPR})},
+  month     = jun,
+  year      = {2026},
+  pages     = {25514--25523},
+  url       = {https://openaccess.thecvf.com/content/CVPR2026/html/Sharma_Portable_Active_Learning_for_Object_Detection_CVPR_2026_paper.html}
+}

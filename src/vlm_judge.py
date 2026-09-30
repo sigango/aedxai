@@ -54,6 +54,68 @@ class VLMJudgmentBatch:
 VLMAssessment = Assessment
 
 
+VERIFY_BOX_PROMPT = (
+    "The image is a crop from a larger photo. Does this crop contain a {class_name}? "
+    "Answer with Yes or No."
+)
+VERIFY_SALIENCY_PROMPT = (
+    "Only some pixels of a photo are shown; everything else is grey. "
+    "Do the visible pixels show part of a {class_name}? Answer with Yes or No."
+)
+
+
+def build_verification_view(
+    image: np.ndarray,
+    detection: "Detection",
+    saliency_map: np.ndarray | None = None,
+    box_context_scale: float = 1.3,
+    salient_box_multiple: float = 2.0,
+    min_image_fraction: float = 0.01,
+    grey_value: int = 128,
+    margin_fraction: float = 0.1,
+) -> Image.Image:
+    """Build the image the VLM verifies.
+
+    Without a saliency map: the detection box enlarged by ``box_context_scale``.
+    With a map: keep the most salient pixels (``salient_box_multiple`` x the box
+    area, at least ``min_image_fraction`` of the image) wherever they are, grey
+    out the rest, and crop to the kept pixels. The detection box itself is not
+    shown unless the explanation points at it, so the answer reflects what the
+    explanation says the detector used.
+    """
+    array = np.ascontiguousarray(np.asarray(image, dtype=np.uint8))
+    height, width = array.shape[:2]
+    x1, y1, x2, y2 = [float(value) for value in detection.bbox]
+
+    if saliency_map is None:
+        cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+        half_w = max(8.0, (x2 - x1) * box_context_scale / 2.0)
+        half_h = max(8.0, (y2 - y1) * box_context_scale / 2.0)
+        left, top = int(max(0, cx - half_w)), int(max(0, cy - half_h))
+        right, bottom = int(min(width, cx + half_w)), int(min(height, cy + half_h))
+        return Image.fromarray(array[top:bottom, left:right])
+
+    saliency = np.asarray(saliency_map, dtype=np.float32)
+    box_area = max(1.0, (x2 - x1) * (y2 - y1))
+    keep_count = int(min(saliency.size, max(salient_box_multiple * box_area, min_image_fraction * saliency.size)))
+    threshold_index = saliency.size - keep_count
+    flat = saliency.reshape(-1)
+    keep_flat = np.zeros(flat.size, dtype=bool)
+    keep_flat[np.argpartition(flat, threshold_index)[threshold_index:]] = True
+    keep = keep_flat.reshape(saliency.shape)
+
+    masked = np.full_like(array, grey_value)
+    masked[keep] = array[keep]
+    rows, cols = np.nonzero(keep)
+    if rows.size == 0:
+        return Image.fromarray(masked)
+    pad_y = int(margin_fraction * (rows.max() - rows.min() + 1))
+    pad_x = int(margin_fraction * (cols.max() - cols.min() + 1))
+    top, bottom = max(0, rows.min() - pad_y), min(height, rows.max() + 1 + pad_y)
+    left, right = max(0, cols.min() - pad_x), min(width, cols.max() + 1 + pad_x)
+    return Image.fromarray(masked[top:bottom, left:right])
+
+
 def _resolve_path(path: str) -> Path:
     """Resolve relative repo paths from either cwd or the package root."""
     raw_path = Path(path)
@@ -628,6 +690,75 @@ class VLMJudge:
         response = self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
         return str(response).strip()
 
+    def verify_region(
+        self,
+        image: np.ndarray,
+        detection: "Detection",
+        saliency_map: np.ndarray | None = None,
+        **view_kwargs: Any,
+    ) -> dict[str, Any]:
+        """Return the VLM's P(yes) that the box (or the salient pixels) shows the detected class.
+
+        One forward pass; the probability is read from the next-token logits for
+        "Yes" vs "No", so no text is generated. Detector confidence is never put
+        in the prompt.
+        """
+        t_start = time.time()
+        view = build_verification_view(image, detection, saliency_map=saliency_map, **view_kwargs)
+        template = VERIFY_BOX_PROMPT if saliency_map is None else VERIFY_SALIENCY_PROMPT
+        p_yes, answer_mass = self._yes_probability(view, template.format(class_name=detection.class_name))
+        return {"p_yes": p_yes, "answer_mass": answer_mass, "vlm_time": float(time.time() - t_start)}
+
+    def _yes_probability(self, pil_image: Image.Image, prompt_text: str) -> tuple[float, float]:
+        """P(Yes) / (P(Yes) + P(No)) for the first answer token, and P(Yes) + P(No)."""
+        self.load_model()
+        assert self.model is not None
+        assert self.processor is not None
+
+        torch = _require_torch()
+        from qwen_vl_utils import process_vision_info
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": pil_image},
+                    {"type": "text", "text": prompt_text},
+                ],
+            }
+        ]
+        text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        image_inputs, video_inputs = process_vision_info(messages)
+        inputs = self.processor(
+            text=[text],
+            images=image_inputs,
+            videos=video_inputs,
+            padding=True,
+            return_tensors="pt",
+        )
+        model_device = getattr(self.model, "device", None) or next(self.model.parameters()).device
+        inputs = inputs.to(model_device)
+
+        if not hasattr(self, "_answer_token_ids"):
+            tokenizer = self.processor.tokenizer
+            self._answer_token_ids = {
+                answer: sorted(
+                    {
+                        tokenizer.encode(variant, add_special_tokens=False)[0]
+                        for variant in (answer, answer.lower(), f" {answer}", f" {answer.lower()}")
+                    }
+                )
+                for answer in ("Yes", "No")
+            }
+
+        with torch.no_grad():
+            logits = self.model(**inputs).logits[0, -1].float()
+        probabilities = torch.softmax(logits, dim=-1)
+        p_yes = float(probabilities[self._answer_token_ids["Yes"]].sum().cpu().item())
+        p_no = float(probabilities[self._answer_token_ids["No"]].sum().cpu().item())
+        mass = p_yes + p_no
+        return (p_yes / mass if mass > 0 else 0.5), mass
+
     def _json_attempts(self, candidate: str, repair_json: Any | None) -> list[tuple[str, str]]:
         """Return candidate JSON strings in priority order."""
         attempts = [("raw", candidate)]
@@ -666,6 +797,9 @@ class VLMJudge:
 
 __all__ = [
     "Assessment",
+    "VERIFY_BOX_PROMPT",
+    "VERIFY_SALIENCY_PROMPT",
+    "build_verification_view",
     "ParseError",
     "VLMAssessment",
     "VLMJudge",

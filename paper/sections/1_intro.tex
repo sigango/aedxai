@@ -1,0 +1,122 @@
+% ============================================================================
+% 1. Introduction
+% Blue numbers (\res) are v1 values or placeholders. Replace every one with the
+% value from the frozen v2 test split (results/analysis/*_coco_test/).
+% Two versions of the findings paragraph follow. Keep the one that matches the
+% gates: A/B = G1 passes, C = G1 fails.
+% ============================================================================
+\section{Introduction}
+\label{sec:intro}
+
+A detector that feeds a planner, a tracker or a human operator is trusted one
+box at a time. Before a downstream system acts on a detection it needs some
+evidence that the detection is correct. The default evidence is the confidence
+score, but detector scores are poorly calibrated~\cite{kuzucu2024calibration,oksuz2023saod},
+and many false positives are confident.
+Meta-classifiers therefore learn whether a detection is a true positive from
+richer signals: statistics of the box and its suppressed candidates
+(MetaDetect~\cite{schubert2021metadetect}) and gradients of the detection
+loss~\cite{riedlinger2023gradient}.
+
+Explanation methods for detectors look like an obvious further source of
+evidence. Gradient-based methods (ODAM~\cite{zhao2023odam}, G-CAME~\cite{nguyen2024gcame})
+and perturbation-based methods (D-RISE~\cite{petsiuk2021drise}, D-CLOSE~\cite{truong2023dclose})
+produce, for each detection, a map of the pixels the detector relied on.
+In practice these maps are looked at, compared and ranked, but rarely
+\emph{used}. They are also usually scored by annotation-free metrics:
+the pointing game and its energy-based variant with the detector's own box as
+reference~\cite{zhang2016excitation,wang2020scorecam}, insertion and deletion
+curves~\cite{petsiuk2018rise}, and sparsity. Benchmarks rank methods by these
+metrics~\cite{nguyen2025odexai}, and explainer-selection frameworks optimise
+them~\cite{cugny2022autoxai}.
+
+We started from the second use. We trained a selector that picks the best
+explainer for each detection, supervised by oracle labels from running every
+explainer and scoring it with such a composite metric. The selector lost to
+always using one method, and the reason was structural rather than a matter
+of tuning. Under the composite, even a perfect per-detection oracle beats the
+best fixed method by only \res{0.003} (YOLOX-S) and \res{0.004}
+(Faster R-CNN) on a scale of~1. The metrics also mostly measure the box.
+Box area and aspect ratio alone predict \res{95\%} of the variance of the
+energy-based pointing game for a perturbation explainer, and a model-free
+Gaussian placed on the box scores \res{above \todo{N} of the four} real
+methods. A metric that uses the detector's box as its reference cannot
+separate a faithful explanation from a box prior, so it cannot be used to
+choose between explanations.
+
+We therefore score explanations against an endpoint they do not define:
+whether the detection they explain is correct. If a map reflects what the
+detector used, then several properties should carry information about whether
+the detection is a true positive (TP) or a false positive (FP): how the score
+reacts when the salient pixels are removed or restored, whether independent
+explainers agree, and whether the salient pixels actually show the predicted
+class. This turns ``is the explanation informative?'' into a prediction
+problem scored by ground truth. It also gives explanations a concrete job:
+verifying detections, and abstaining when the evidence is weak.
+
+The difficulty is attribution. Any perturbation-based feature also probes
+the detector's robustness, and any box-conditioned map also encodes the box.
+A gain over confidence could therefore come from probing or from geometry
+rather than from the content of the explanation. We design the study so these
+sources can be separated.
+(i)~Model-free control maps (a Gaussian on the box, a centre prior, random
+noise, and pixel-shuffled explanations) pass through exactly the same
+evaluator and feature pipeline as real explanations. They estimate the gain
+available from probing and geometry alone.
+% Depends on PAPER_OUTLINE.md section 5.2 (pre-NMS, loss gradients, TTA). If any
+% of these is not implemented, weaken this sentence to match what was run.
+(ii)~The baselines use the same detector's outputs, including its pre-NMS
+candidates, together with loss gradients and test-time augmentation.
+(iii)~A vision-language model is asked about the box crop and, separately,
+about the salient pixels, so the value of looking where the explanation
+points is isolated.
+(iv)~Splits are disjoint and the decision gates are fixed before the test
+split is run.
+
+%% ---- Findings: version A/B (G1 passes) ---------------------------------
+Our findings are threefold. First, on two detectors the annotation-free
+composite is largely a measure of box geometry, and per-detection explainer
+selection has essentially no headroom under it
+(\cref{sec:audit}). Second, explanation evidence does carry information about
+correctness that output, gradient and augmentation features miss. It raises
+TP/FP AUROC by \res{+0.0XX} on YOLOX-S and \res{+0.0XX} on Faster R-CNN on
+COCO, and by \res{+0.0XX} on BDD100K. The gain is concentrated on background
+and class-confusion false positives, with \res{little} gain on localization
+errors. The model-free controls recover \res{XX\%} of it, so \res{most/part}
+of the signal comes from the content of the maps rather than from probing
+alone (\cref{sec:results}). Third, the evidence is useful at a fraction of its
+cost. Choosing which detections to explain keeps \res{XX\%} of the gain at
+half the compute. Conformal risk control then keeps the per-image rate of
+accepted false positives below $\alpha=\res{0.1}$ while retaining
+\res{XX\%} of true positives, versus \res{XX\%} with confidence alone.
+
+%% ---- Findings: version C (G1 fails) ------------------------------------
+% Our findings are twofold. First, on two detectors the annotation-free
+% composite is largely a measure of box geometry, and per-detection explainer
+% selection has essentially no headroom under it (\cref{sec:audit}). Second,
+% explanation evidence does \emph{not} verify detections beyond what the
+% detector already reveals. Across maps, faithfulness curves, cross-explainer
+% agreement and VLM checks of salient pixels, the AUROC gain over output,
+% gradient and augmentation features is \res{+0.00X} (95\% CI
+% [\res{-0.00X}, \res{+0.00X}]). This upper-bounds how much correctness
+% information current detector explanations add. Model-free controls match
+% real explanations on this endpoint as well (\cref{sec:results}).
+
+\noindent In summary, we make three contributions:
+\begin{itemize}
+  \item \textbf{A detection-specific audit of annotation-free explanation
+  metrics.} Model-free controls, a box-relative insertion/deletion protocol
+  and a headroom analysis show what these metrics reward, and why
+  per-detection explainer selection cannot improve on them.
+  \item \textbf{\method, explanations as evidence.} A controlled study of
+  whether explanation-derived evidence (map structure, faithfulness-curve
+  shape, cross-explainer agreement, and VLM verification of salient pixels)
+  predicts detection correctness beyond output-, gradient- and
+  augmentation-based meta-classifiers. A placebo decomposition separates
+  explanation content from perturbation probing and box geometry.
+  \item \textbf{Using the evidence under a budget.} Value-of-information
+  acquisition decides which detections to explain, and conformal risk control
+  decides when to abstain. We also report AP after re-scoring, on YOLOX-S and
+  Faster R-CNN, COCO and BDD100K. Code, image manifests and the frozen
+  analysis configuration will be released.
+\end{itemize}

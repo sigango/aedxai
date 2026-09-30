@@ -32,7 +32,7 @@ class FigureGenerationConfig:
     figures_dir: str = "results/figures"
     dpi: int = 300
     style: str = "seaborn-v0_8-paper"
-    synthesize_if_missing: bool = True
+    synthesize_if_missing: bool = False
 
 
 class FigureGenerator:
@@ -70,21 +70,37 @@ class FigureGenerator:
         self.matplotlib.rcParams.update({"font.size": 11, "font.family": "serif"})
 
     def run(self) -> None:
-        """Generate summary CSVs, JSON metadata, and all configured figures."""
+        """Generate summary CSVs, JSON metadata, and all configured figures.
+
+        Summaries and figures are produced PER DETECTOR so that methods are
+        only ever compared on identical image/detector populations.
+        """
         dataframe = self._load_main_results()
-        summary = self._summarize(dataframe)
+        if "detector" not in dataframe.columns:
+            dataframe["detector"] = "unknown"
 
+        summaries = []
+        detectors = sorted(dataframe["detector"].astype(str).unique().tolist())
+        for detector_name in detectors:
+            subset = dataframe.loc[dataframe["detector"].astype(str) == detector_name]
+            summary = self._summarize(subset)
+            summary.insert(0, "detector", detector_name)
+            summaries.append(summary)
+
+            suffix = "" if len(detectors) == 1 else f"_{detector_name}"
+            self._plot_composite_distribution(subset, suffix=suffix)
+            self._plot_metric_bars(summary, suffix=suffix)
+            self._plot_runtime_bars(summary, suffix=suffix)
+
+        combined = self.pd.concat(summaries, ignore_index=True)
         table_path = self.figures_dir / "main_results_summary.csv"
-        summary.to_csv(table_path, index=False)
-        logger.info("Wrote summary table to %s", table_path)
-
-        self._plot_composite_distribution(dataframe)
-        self._plot_metric_bars(summary)
-        self._plot_runtime_bars(summary)
+        combined.to_csv(table_path, index=False)
+        logger.info("Wrote per-detector summary table to %s", table_path)
 
         metadata = {
             "num_rows": int(len(dataframe)),
             "methods": sorted(dataframe["method"].unique().tolist()),
+            "detectors": detectors,
             "figures_dir": str(self.figures_dir),
         }
         with (self.figures_dir / "figure_generation_summary.json").open("w", encoding="utf-8") as handle:
@@ -92,16 +108,18 @@ class FigureGenerator:
         logger.info("Figure generation complete: %s", self.figures_dir)
 
     def _load_main_results(self) -> Any:
-        """Load a unified main-results DataFrame from real outputs or synthetic fallback."""
-        main_results = self.results_root / "main_results.csv"
-        if main_results.exists():
-            logger.info("Loading main results from %s", main_results)
-            return self.pd.read_csv(main_results)
+        """Load a unified main-results DataFrame with per-detector provenance.
 
+        Source CSVs always take precedence: the cached results/main_results.csv
+        is REBUILT whenever any source CSV exists, so a stale cache can never
+        mask fixed inputs. Every AED-XAI run directory (results/aedxai*/) and
+        every baseline CSV is loaded with its detector so downstream summaries
+        can compare methods on identical populations.
+        """
         frames = []
-        aedxai_path = self.results_root / "aedxai" / "results.csv"
-        if aedxai_path.exists():
-            frames.append(self._convert_pipeline_csv(aedxai_path, "AED-XAI (Ours)"))
+        for path in sorted(self.results_root.glob("aedxai*/results.csv")):
+            default_detector = path.parent.name.removeprefix("aedxai").lstrip("_") or "yolox-s"
+            frames.append(self._convert_pipeline_csv(path, "AED-XAI (Ours)", default_detector))
 
         baseline_paths = sorted(self.results_root.glob("baseline*/baseline_*_results.csv"))
         baseline_paths += sorted(self.results_root.glob("**/baseline_*_results.csv"))
@@ -111,7 +129,8 @@ class FigureGenerator:
                 continue
             seen_paths.add(path)
             method = self._method_from_baseline_path(path)
-            frames.append(self._convert_pipeline_csv(path, method))
+            detector = self._detector_from_baseline_path(path)
+            frames.append(self._convert_pipeline_csv(path, method, detector))
 
         if frames:
             dataframe = self.pd.concat(frames, ignore_index=True)
@@ -119,10 +138,15 @@ class FigureGenerator:
             cache_path = self.results_root / "main_results.csv"
             try:
                 dataframe.to_csv(cache_path, index=False)
-                logger.info("Cached unified main_results -> %s", cache_path)
+                logger.info("Rebuilt unified main_results -> %s", cache_path)
             except OSError as exc:
                 logger.warning("Could not cache main_results.csv: %s", exc)
             return dataframe
+
+        main_results = self.results_root / "main_results.csv"
+        if main_results.exists():
+            logger.info("No source CSVs found; loading cached main results from %s", main_results)
+            return self.pd.read_csv(main_results)
 
         if not self.config.synthesize_if_missing:
             raise FileNotFoundError(
@@ -133,25 +157,48 @@ class FigureGenerator:
         logger.warning("No experiment CSVs found under %s; using synthetic placeholder data.", self.results_root)
         return self._synthesize_main_results()
 
-    def _convert_pipeline_csv(self, path: Path, method: str) -> Any:
+    def _convert_pipeline_csv(self, path: Path, method: str, default_detector: str = "yolox-s") -> Any:
         """Convert run_experiments/run_baseline CSV schema into plotting schema."""
         dataframe = self.pd.read_csv(path)
+        if "detector" in dataframe.columns and len(dataframe):
+            detector = dataframe["detector"].astype(str)
+        else:
+            detector = default_detector
+        if "explain_time" in dataframe.columns:
+            computation_time = dataframe["explain_time"]
+        else:
+            # Legacy CSVs lack explanation timing; total_time there is dominated
+            # by insertion/deletion evaluation forwards, not explanation cost.
+            computation_time = dataframe.get("total_time", 0.0)
         converted = self.pd.DataFrame(
             {
                 "image_id": dataframe.get("image_path", self.pd.Series(range(len(dataframe)))).astype(str),
                 "method": method,
+                "detector": detector,
                 "pg": dataframe.get("mean_pg", 0.0),
                 "ebpg": dataframe.get("mean_ebpg", 0.0),
                 "oa": dataframe.get("mean_oa", 0.0),
                 "sparsity": dataframe.get("mean_sparsity", 0.0),
                 "composite": dataframe.get("composite_score", 0.0),
-                "computation_time": dataframe.get("total_time", 0.0),
+                "computation_time": computation_time,
                 "scene_complexity": dataframe.get("scene_complexity", "unknown"),
                 "num_detections": dataframe.get("num_detections", 0),
             }
         )
         logger.info("Loaded %s rows for %s from %s", len(converted), method, path)
         return converted
+
+    @staticmethod
+    def _detector_from_baseline_path(path: Path) -> str:
+        """Infer the detector from baseline_[<detector>_]<method>_results.csv."""
+        stem = path.stem.removeprefix("baseline_").removesuffix("_results")
+        for method_key in ("gradcam", "gcame", "dclose", "lime"):
+            if stem == method_key:
+                return "yolox-s"
+            suffix = f"_{method_key}"
+            if stem.endswith(suffix):
+                return stem[: -len(suffix)]
+        return "yolox-s"
 
     @staticmethod
     def _method_from_baseline_path(path: Path) -> str:
@@ -217,10 +264,11 @@ class FigureGenerator:
         figure.savefig(png_path, dpi=self.config.dpi, bbox_inches="tight")
         logger.info("Saved %s and %s", pdf_path, png_path)
 
-    def _plot_composite_distribution(self, dataframe: Any) -> None:
+    def _plot_composite_distribution(self, dataframe: Any, suffix: str = "") -> None:
         """Render a composite-score distribution plot by method."""
         fig, ax = self.plt.subplots(figsize=(8, 4.5))
-        ordered_methods = list(self.method_colors.keys())
+        present = set(dataframe["method"].unique().tolist())
+        ordered_methods = [method for method in self.method_colors if method in present]
         data = [dataframe.loc[dataframe["method"] == method, "composite"].to_numpy() for method in ordered_methods]
         violin = ax.violinplot(data, showmeans=True, showextrema=False)
         for body, method in zip(violin["bodies"], ordered_methods):
@@ -231,10 +279,10 @@ class FigureGenerator:
         ax.set_title("Composite Score Distribution by Method")
         ax.grid(axis="y", alpha=0.25)
         fig.tight_layout()
-        self._save_figure(fig, "composite_distribution")
+        self._save_figure(fig, f"composite_distribution{suffix}")
         self.plt.close(fig)
 
-    def _plot_metric_bars(self, summary: Any) -> None:
+    def _plot_metric_bars(self, summary: Any, suffix: str = "") -> None:
         """Render grouped mean metric bars by method."""
         fig, ax = self.plt.subplots(figsize=(9, 4.8))
         methods = summary["method"].tolist()
@@ -251,10 +299,10 @@ class FigureGenerator:
         ax.legend(ncol=3, fontsize=8)
         ax.grid(axis="y", alpha=0.25)
         fig.tight_layout()
-        self._save_figure(fig, "metric_summary")
+        self._save_figure(fig, f"metric_summary{suffix}")
         self.plt.close(fig)
 
-    def _plot_runtime_bars(self, summary: Any) -> None:
+    def _plot_runtime_bars(self, summary: Any, suffix: str = "") -> None:
         """Render mean computation-time bars by method."""
         fig, ax = self.plt.subplots(figsize=(7, 4.2))
         methods = summary["method"].tolist()
@@ -267,7 +315,7 @@ class FigureGenerator:
         ax.tick_params(axis="x", rotation=15)
         ax.grid(axis="y", alpha=0.25)
         fig.tight_layout()
-        self._save_figure(fig, "runtime_summary")
+        self._save_figure(fig, f"runtime_summary{suffix}")
         self.plt.close(fig)
 
 
@@ -278,7 +326,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--figures-dir", default="results/figures", help="Directory to write generated figures.")
     parser.add_argument("--dpi", type=int, default=300, help="Output image DPI.")
     parser.add_argument("--style", default="seaborn-v0_8-paper", help="Matplotlib style name.")
-    parser.add_argument("--no-synthetic", action="store_true", help="Fail instead of using synthetic data when CSVs are absent.")
+    parser.add_argument(
+        "--allow-synthetic",
+        action="store_true",
+        help="Plot synthetic placeholder data when no CSVs exist (never for paper figures).",
+    )
+    parser.add_argument("--no-synthetic", action="store_true", help="Deprecated: synthetic data is off by default.")
     parser.add_argument("--log-level", default="INFO", help="Python logging level.")
     return parser
 
@@ -295,7 +348,7 @@ def main() -> None:
         figures_dir=str(args.figures_dir),
         dpi=int(args.dpi),
         style=str(args.style),
-        synthesize_if_missing=not bool(args.no_synthetic),
+        synthesize_if_missing=bool(args.allow_synthetic) and not bool(args.no_synthetic),
     )
     FigureGenerator(config).run()
 

@@ -1,0 +1,120 @@
+% ============================================================================
+% 2. Related Work (target ~0.7 page)
+% Keep third-person wording for every AELab paper (G-CAME, D-CLOSE, ODExAI)
+% because review is double-blind.
+% ============================================================================
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Explaining object detectors.}
+Explaining a detector means explaining one detection: a box, a class and a
+score. Gradient-based methods adapt class activation
+mapping~\cite{selvaraju2017gradcam} to this target.
+ODAM~\cite{zhao2023odam} builds instance-specific maps from the gradients of
+each prediction. G-CAME~\cite{nguyen2024gcame} weights the activation map
+with a Gaussian centred on the predicted box.
+Perturbation-based methods treat the detector as a black box.
+D-RISE~\cite{petsiuk2021drise} scores random masks by the similarity between
+the masked-image detections and the target detection.
+D-CLOSE~\cite{truong2023dclose} applies several levels of segmentation to the
+image and combines the resulting maps, and LIME~\cite{ribeiro2016lime}
+fits a local surrogate model over superpixels.
+Toolkits and benchmarks compare these methods across
+detectors~\cite{padmanabhan2022dext,nguyen2025odexai}.
+Two points matter for us. First, every such explainer takes the detection's
+box as part of its target, and some, such as G-CAME, also build a box prior
+into the map. Second, explanations have seldom been used downstream. The
+closest exception is ODAM-NMS~\cite{zhao2023odam}, which uses the similarity
+of explanations to remove duplicate boxes. We use explanations to predict
+whether a detection is correct.
+
+\paragraph{Evaluating saliency, and its pitfalls.}
+The pointing game~\cite{zhang2016excitation} and its energy-based
+variant~\cite{wang2020scorecam} measure how much saliency falls inside a
+reference box. Insertion and deletion~\cite{petsiuk2018rise} measure how the
+score changes as salient pixels are restored or removed.
+Several failure modes of this kind of evaluation are known for image
+classification:
+\begin{itemize}
+  \item Trivial baselines score well. Zhang \etal already reported a centre
+  baseline for the pointing game~\cite{zhang2016excitation}. A deliberately
+  uninformative ``Fake-CAM'' scores well on standard confidence-drop
+  % CHECK against the full text of Poppi et al. (the abstract does not name Fake-CAM).
+  metrics~\cite{poppi2021revisiting}, and dummy explanations are not reliably
+  separated from real ones~\cite{stassin2023dummy}.
+  \item Removal-based scores leak information through the mask
+  shape~\cite{hooker2019roar,rong2022road} and depend on the occlusion
+  strategy~\cite{bluecher2024occlusion}.
+  \item Metrics disagree with each other and are unstable, as shown by sanity
+  checks for maps~\cite{adebayo2018sanity} and for
+  metrics~\cite{tomsett2020sanity}, controlled
+  settings~\cite{rao2022attribution}, meta-evaluation
+  toolkits~\cite{hedstrom2023quantus,hedstrom2023metaquantus} and large-scale
+  benchmarks~\cite{klein2024latec}.
+\end{itemize}
+For detectors, Padmanabhan \etal~\cite{padmanabhan2023sanity} apply
+randomization tests and find the common evaluation metrics statistically
+unreliable. None of this work examines the setting where the \emph{detector's
+own box} serves as pseudo-ground truth, which is how annotation-free
+detection benchmarks and explainer
+selection~\cite{nguyen2025odexai,cugny2022autoxai} operate.
+Our audit extends the classification findings to that setting. It adds a
+model-free box prior and a box-relative insertion/deletion protocol, and
+reports what the metrics imply for choosing an explainer per detection.
+
+\paragraph{Predicting detection errors.}
+MetaDetect~\cite{schubert2021metadetect} introduced meta-classification
+(TP \vs FP) and meta-regression (IoU) for detections. Its features are
+aggregated over the box and the candidates suppressed by non-maximum
+suppression. Riedlinger \etal~\cite{riedlinger2023gradient} add gradients of
+the detection loss with respect to network parameters, and show that they
+carry information complementary to output-based features. The protocol has
+since been carried to lidar~\cite{riedlinger2025lmd}.
+Other sources of uncertainty include Monte-Carlo
+dropout~\cite{miller2018dropout}, ensembles~\cite{lakshminarayanan2017ensembles},
+post-hoc calibration~\cite{kuzucu2024calibration,oksuz2023saod}, and
+perturbation-sensitive internal features~\cite{wilson2023safe}.
+Closer to deployment, run-time monitors predict detection failures from the
+detector's internal representations~\cite{yatbaz2024introspection}.
+Label-free evaluation estimates a detector's accuracy from the consistency
+and reliability of its predictions~\cite{pcr2025}. TP/FP classifiers on
+detector outputs also guide active learning~\cite{sharma2026portable}, and
+DetRefiner~\cite{okazaki2026detrefiner} refines open-vocabulary detections
+post hoc with a feature-fusion transformer.
+Error taxonomies~\cite{hoiem2012diagnosing,bolya2020tide} separate
+localization, duplicate, class-confusion and background errors. We report
+results per error type because the value of an explanation should differ
+between them.
+Our baselines are these output-, gradient- and augmentation-based
+meta-classifiers. The question is what explanation evidence adds on top of
+them.
+
+\paragraph{Explanations as signals of failure.}
+Attribution statistics have been used to flag unreliable predictions in image
+classification. Examples include attribution-based
+confidence~\cite{jha2019abc}, adversarial-example detection from the spread
+of attributions~\cite{yang2020mlloo} or from SHAP
+signatures~\cite{fidel2020shap}, and out-of-distribution detection from
+attribution abnormality~\cite{chen2023gaia} or learned
+heatmaps~\cite{hornauer2023heatmap}. Mohseni \etal~\cite{mohseni2019predicting}
+predict steering failures from saliency maps. Closest to our goal,
+Spagnolo \etal~\cite{spagnolo2024xaimaps} classify lesion detections in MRI as
+TP or FP from radiomic features of their saliency maps.
+We study the question for object detection on natural images. We use several
+explainers, faithfulness-curve shape and cross-explainer agreement. We
+compare against output- and gradient-based meta-classifiers, and use placebo
+maps to test whether a gain comes from the explanation itself.
+
+\paragraph{VLM verification and risk-controlled abstention.}
+Vision-language models have been used to re-score detections.
+ViLD~\cite{gu2022vild} classifies region crops with CLIP embeddings. For
+referring-expression comprehension, a VLM can verify a detector's proposals
+one box at a time with True/False questions~\cite{vlmverify2025}. We query Qwen2.5-VL~\cite{bai2025qwen25vl} about the
+box crop and, separately, about the salient pixels. The confidence score never
+appears in the prompt.
+For abstention we build on conformal risk control~\cite{angelopoulos2024crc},
+which has been applied to object detection in safety-critical
+settings~\cite{andeol2023conformal,andeol2025sequential}, and on selective
+prediction~\cite{geifman2017selective,hendrycks2017baseline}. We found no prior
+work that decides \emph{which} detections deserve an expensive explanation
+under a compute budget. We frame this as value-of-information acquisition.

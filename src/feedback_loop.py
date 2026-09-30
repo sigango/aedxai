@@ -23,6 +23,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Methods that need the detector's CAM target layer (mirrors src.xai_methods.CAM_METHODS
+# without importing the heavy explainer modules here).
+_CAM_METHODS = frozenset({"gradcam", "gcame", "gradcam_raw", "gcame_raw"})
+
 
 @dataclass(slots=True)
 class FeedbackIteration:
@@ -34,6 +38,7 @@ class FeedbackIteration:
     num_detections: int
     mean_composite_score: float
     per_detection_scores: list[float]
+    num_escalations: int = 0
 
 
 @dataclass(slots=True)
@@ -49,6 +54,7 @@ class FeedbackResult:
     total_time: float
     final_assessments: list[Any] = field(default_factory=list)
     final_selector_reasoning: dict[int, dict[str, Any]] = field(default_factory=dict)
+    num_escalations: int = 0
 
 
 FeedbackOutcome = FeedbackResult
@@ -88,6 +94,19 @@ def _load_feedback_config(config_source: str | Mapping[str, Any]) -> dict[str, A
     return dict(evaluation.get("feedback", {}))
 
 
+def _box_iou(box_a: list[int], box_b: list[int]) -> float:
+    """IoU of two [x1, y1, x2, y2] boxes."""
+    ix1, iy1 = max(box_a[0], box_b[0]), max(box_a[1], box_b[1])
+    ix2, iy2 = min(box_a[2], box_b[2]), min(box_a[3], box_b[3])
+    intersection = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+    union = (
+        max(0, box_a[2] - box_a[0]) * max(0, box_a[3] - box_a[1])
+        + max(0, box_b[2] - box_b[0]) * max(0, box_b[3] - box_b[1])
+        - intersection
+    )
+    return float(intersection / union) if union > 0 else 0.0
+
+
 class FeedbackLoop:
     """Closed-loop detector refinement based on XAI quality scores."""
 
@@ -105,6 +124,42 @@ class FeedbackLoop:
         self.conf_thresh_range = tuple(float(value) for value in self.config.get("conf_thresh_range", [0.10, 0.70]))
         self.nms_thresh_range = tuple(float(value) for value in self.config.get("nms_thresh_range", [0.30, 0.70]))
         self.min_improvement = float(self.config.get("min_improvement", 0.01))
+        # Evaluate-then-escalate cascade: when a detection's composite falls
+        # below tau, run the backup method and keep the better-scoring map.
+        # tau must be calibrated OFFLINE on a held-out split (a percentile of
+        # the default method's per-detection composites) and frozen here —
+        # never computed from the test image itself.
+        escalation_config = dict(self.config.get("escalation", {}))
+        self.escalation_enabled = bool(escalation_config.get("enabled", False))
+        self.escalation_backup_method = str(escalation_config.get("backup_method", "lime"))
+        self.escalation_tau = float(escalation_config.get("tau", 0.5))
+        # tau is calibrated per detector (score scales differ); "tau" is only the fallback.
+        self.escalation_tau_by_detector = {
+            str(name): float(value) for name, value in dict(escalation_config.get("tau_by_detector") or {}).items()
+        }
+        # When set, every detection uses this method and the selector is bypassed
+        # (e.g. fixed_method: gcame + escalation gives the G-CAME -> backup cascade).
+        fixed_method = self.config.get("fixed_method")
+        self.fixed_method = str(fixed_method) if fixed_method else None
+        self._warned_tau: set[str] = set()
+        # Method-independent VLM false-positive filtering. For fair comparison
+        # this must be applied to every method's evaluation population, so it
+        # defaults to off and is enabled deliberately per experiment.
+        self.vlm_fp_filter = bool(self.config.get("vlm_fp_filter", False))
+
+    def escalation_tau_for(self, detector: Any) -> float:
+        """Return the calibrated tau for this detector, falling back to the global value."""
+        name = str(getattr(detector, "model_name", "") or "")
+        if name in self.escalation_tau_by_detector:
+            return self.escalation_tau_by_detector[name]
+        if self.escalation_enabled and self.escalation_tau_by_detector and name not in self._warned_tau:
+            self._warned_tau.add(name)
+            logger.warning(
+                "No calibrated escalation tau for detector '%s'; using fallback tau=%.4f.",
+                name,
+                self.escalation_tau,
+            )
+        return self.escalation_tau
 
     def should_refine(
         self,
@@ -179,6 +234,10 @@ class FeedbackLoop:
         assessments: list[Any] = []
         scene_complexity = "medium"
         prev_composite = -1.0
+        num_escalations = 0
+        flagged_ids: set[int] = set()
+        flagged_boxes: list[tuple[list[int], int]] = []
+        escalation_tau = self.escalation_tau_for(detector)
 
         last_detections: list["Detection"] = []
         last_saliency_maps: list["SaliencyMap"] = []
@@ -200,6 +259,7 @@ class FeedbackLoop:
                     total_time=float(time.time() - t_start),
                     final_assessments=list(assessments),
                     final_selector_reasoning={},
+                    num_escalations=0,
                 )
 
             if iteration_index == 0:
@@ -212,17 +272,77 @@ class FeedbackLoop:
                         if hasattr(detector, "compute_scene_complexity")
                         else "medium"
                     )
+                if self.vlm_fp_filter and assessments:
+                    flagged_ids = {
+                        int(getattr(assessment, "detection_id", -1))
+                        for assessment in assessments
+                        if bool(getattr(assessment, "is_false_positive", False))
+                    }
+                    flagged_boxes = [
+                        (list(detection.bbox), int(detection.class_id))
+                        for detection in detections
+                        if detection.detection_id in flagged_ids
+                    ]
 
-            selector_reasoning = {
-                detection.detection_id: self._predict_selector_reasoning(
-                    xai_selector=xai_selector,
-                    detection=detection,
-                    scene_complexity=scene_complexity,
-                    num_detections=len(detections),
-                    image=image,
-                )
-                for detection in detections
-            }
+            if self.vlm_fp_filter and flagged_boxes:
+                if iteration_index == 0:
+                    kept = [detection for detection in detections if detection.detection_id not in flagged_ids]
+                else:
+                    # Flags come from iteration 0; later iterations re-detect with new
+                    # ids, so match flagged boxes by class and IoU instead.
+                    kept = [
+                        detection
+                        for detection in detections
+                        if not any(
+                            detection.class_id == flagged_class and _box_iou(detection.bbox, flagged_box) >= 0.5
+                            for flagged_box, flagged_class in flagged_boxes
+                        )
+                    ]
+                if len(kept) != len(detections):
+                    logger.info(
+                        "VLM FP filter removed %d/%d detections at iteration %d.",
+                        len(detections) - len(kept),
+                        len(detections),
+                        iteration_index,
+                    )
+                detections = kept
+                last_detections = detections
+                if not detections:
+                    return FeedbackResult(
+                        image_path=image_path,
+                        iterations=iterations,
+                        final_detections=[],
+                        final_saliency_maps=[],
+                        final_eval_results=[],
+                        converged=False,
+                        total_time=float(time.time() - t_start),
+                        final_assessments=list(assessments),
+                        final_selector_reasoning={},
+                        num_escalations=0,
+                    )
+
+            if self.fixed_method is not None:
+                selector_reasoning = {
+                    detection.detection_id: {
+                        "method": self.fixed_method,
+                        "source": "fixed",
+                        "probabilities": None,
+                        "confidence": 1.0,
+                        "rule_trigger": None,
+                    }
+                    for detection in detections
+                }
+            else:
+                selector_reasoning = {
+                    detection.detection_id: self._predict_selector_reasoning(
+                        xai_selector=xai_selector,
+                        detection=detection,
+                        scene_complexity=scene_complexity,
+                        num_detections=len(detections),
+                        image=image,
+                    )
+                    for detection in detections
+                }
             selected_methods = {
                 detection_id: reasoning["method"]
                 for detection_id, reasoning in selector_reasoning.items()
@@ -230,7 +350,7 @@ class FeedbackLoop:
             last_selector_reasoning = selector_reasoning
 
             needs_target_layer = any(
-                selected_methods[detection.detection_id] in {"gradcam", "gcame"} for detection in detections
+                selected_methods[detection.detection_id] in _CAM_METHODS for detection in detections
             )
             target_layer = detector.get_target_layer() if needs_target_layer else None
             model = detector.get_model()
@@ -243,7 +363,7 @@ class FeedbackLoop:
                     model=model,
                     image=image,
                     detection=detection,
-                    target_layer=target_layer if method_name in {"gradcam", "gcame"} else None,
+                    target_layer=target_layer if method_name in _CAM_METHODS else None,
                 )
                 saliency_maps.append(saliency)
             last_saliency_maps = saliency_maps
@@ -258,6 +378,24 @@ class FeedbackLoop:
                 )
                 for detection, saliency in zip(detections, saliency_maps)
             ]
+
+            iteration_escalations = 0
+            if self.escalation_enabled:
+                saliency_maps, eval_results, iteration_escalations = self._escalate_low_scores(
+                    detections=detections,
+                    saliency_maps=saliency_maps,
+                    eval_results=eval_results,
+                    selector_reasoning=selector_reasoning,
+                    xai_methods=xai_methods,
+                    detector=detector,
+                    model=model,
+                    image=image,
+                    evaluator=evaluator,
+                    tau=escalation_tau,
+                )
+                last_saliency_maps = saliency_maps
+            # Report escalations of the returned iteration only (earlier ones are discarded).
+            num_escalations = iteration_escalations
             last_eval_results = eval_results
 
             mean_composite = float(np.mean([result.composite for result in eval_results])) if eval_results else 0.0
@@ -271,6 +409,7 @@ class FeedbackLoop:
                     num_detections=len(detections),
                     mean_composite_score=mean_composite,
                     per_detection_scores=per_detection_scores,
+                    num_escalations=iteration_escalations,
                 )
             )
 
@@ -294,6 +433,7 @@ class FeedbackLoop:
                     total_time=float(time.time() - t_start),
                     final_assessments=list(assessments),
                     final_selector_reasoning=dict(last_selector_reasoning),
+                    num_escalations=num_escalations,
                 )
 
             # prev_composite is initialized to -1.0 (sentinel). On iteration 0, improvement = inf,
@@ -315,6 +455,7 @@ class FeedbackLoop:
                     total_time=float(time.time() - t_start),
                     final_assessments=list(assessments),
                     final_selector_reasoning=dict(last_selector_reasoning),
+                    num_escalations=num_escalations,
                 )
 
             prev_composite = mean_composite
@@ -334,7 +475,87 @@ class FeedbackLoop:
             total_time=float(time.time() - t_start),
             final_assessments=list(assessments),
             final_selector_reasoning=dict(last_selector_reasoning),
+            num_escalations=num_escalations,
         )
+
+    def _escalate_low_scores(
+        self,
+        detections: list["Detection"],
+        saliency_maps: list["SaliencyMap"],
+        eval_results: list["EvalResult"],
+        selector_reasoning: dict[int, dict[str, Any]],
+        xai_methods: dict[str, "XAIExplainer"],
+        detector: "DetectorWrapper",
+        model: Any,
+        image: np.ndarray,
+        evaluator: "AutoEvaluator",
+        tau: float | None = None,
+    ) -> tuple[list["SaliencyMap"], list["EvalResult"], int]:
+        """Escalate low-scoring explanations to the backup method, keeping the max.
+
+        For each detection whose composite falls below the calibrated tau, the
+        backup explainer runs and whichever saliency map scores higher on the
+        same annotation-free composite is kept. Because the evaluator is
+        deterministic, this never decreases the selection metric.
+        """
+        tau = self.escalation_tau if tau is None else float(tau)
+        backup_name = self.escalation_backup_method
+        backup = xai_methods.get(backup_name)
+        if backup is None:
+            logger.warning(
+                "Escalation enabled but backup method '%s' is not among the loaded "
+                "XAI methods; skipping escalation.",
+                backup_name,
+            )
+            return saliency_maps, eval_results, 0
+
+        backup_target_layer = (
+            detector.get_target_layer() if backup_name in _CAM_METHODS else None
+        )
+        escalations = 0
+        for index, (detection, current_eval) in enumerate(zip(detections, eval_results)):
+            if float(current_eval.composite) >= tau:
+                continue
+            reasoning = dict(selector_reasoning.get(detection.detection_id, {}))
+            if reasoning.get("method") == backup_name:
+                continue
+
+            backup_saliency = backup.explain(
+                model=model,
+                image=image,
+                detection=detection,
+                target_layer=backup_target_layer,
+            )
+            backup_eval = evaluator.evaluate_all(
+                saliency_map=getattr(backup_saliency, "map", backup_saliency),
+                bbox=detection.bbox,
+                model=model,
+                image=image,
+                detection=detection,
+            )
+            escalations += 1
+            kept_backup = float(backup_eval.composite) > float(current_eval.composite)
+            if kept_backup:
+                saliency_maps[index] = backup_saliency
+                eval_results[index] = backup_eval
+            reasoning.update(
+                {
+                    "escalated": True,
+                    "escalation_backup": backup_name,
+                    "escalation_kept": "backup" if kept_backup else "default",
+                }
+            )
+            selector_reasoning[detection.detection_id] = reasoning
+
+        if escalations:
+            logger.info(
+                "Escalated %d/%d detections below tau=%.3f to '%s'.",
+                escalations,
+                len(detections),
+                tau,
+                backup_name,
+            )
+        return saliency_maps, eval_results, escalations
 
     @staticmethod
     def _predict_selector_reasoning(

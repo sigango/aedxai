@@ -31,6 +31,8 @@ config/
   vlm_config.yaml
   xai_config.yaml
   eval_config.yaml
+  evidence_config.yaml        # v2 evidence runs (full, dev pilot)
+  evidence_config_lite.yaml   # v2 evidence runs (calib/test/cross-domain)
 
 src/
   detector.py
@@ -42,7 +44,13 @@ src/
   pipeline.py
   pipeline_io.py
   utils.py
-  xai_methods/
+  gt_matching.py      # v2: COCO-format GT, TP/FP matching, AP
+  evidence.py         # v2: per-detection evidence features
+  evidence_io.py      # v2: shard records -> per-detection DataFrame (CPU)
+  provenance.py       # run manifests, image manifests
+  notebook_utils.py   # v2 notebooks: run tasks/stages, progress, budget, tau, gates
+  v2_figures.py       # v2 paper figures (matplotlib, lazy import)
+  xai_methods/        # incl. controls.py (bbox/center prior, random, shuffle)
 
 scripts/
   download_data.sh
@@ -53,6 +61,16 @@ scripts/
   run_cross_domain.py
   ablation_selector_size.py
   generate_figures.py
+  make_manifests.py            # v2: disjoint dev/calib/test image manifests
+  convert_annotations.py       # v2: VOC/BDD100K/VisDrone -> COCO-80 JSON
+  run_evidence.py              # v2: GPU stage 1 (sharded, resumable)
+  run_vlm_verification.py      # v2: GPU stage 2
+  analyze_evidence.py          # v2: gates G1-G3, abstention (CPU)
+  analyze_metric_validity.py   # v2: metric audit, headroom (CPU)
+  calibrate_tau.py             # per-detector cascade tau
+
+cluster/                        # task.sh, submit.sh, env_check.sh, cluster.env.example
+manifests/                      # committed image manifests (created by make_manifests.py)
 
 notebooks/
   00_setup_and_data.ipynb
@@ -61,6 +79,9 @@ notebooks/
   03_xai_comparison.ipynb
   04_run_all_experiments.ipynb
   05_results_visualization.ipynb
+  06_v2_setup_and_smoke.ipynb
+  07_v2_run_experiments.ipynb
+  08_v2_analysis_and_figures.ipynb
 
 tests/
   test_*.py
@@ -230,6 +251,8 @@ SaliencyMap(
     method_name: str,
     computation_time: float,
     detection_id: int,
+    is_fallback: bool = False,         # True = bbox-prior substituted for a failed/zero map
+    fallback_reason: str | None = None,
 )
 ```
 
@@ -330,7 +353,17 @@ gradcam
 gcame
 dclose
 lime
+gcame_raw      # variant: use_bbox_center_weighting=false
+gradcam_raw    # variant: renormalize_in_bbox=false
+bbox_prior     # control: Gaussian on the detection box
+center_prior   # control: Gaussian on the image centre
+random         # control: seeded uniform noise
 ```
+
+`shuffle_saliency(map, seed)` builds the pixel-shuffled control. `CAM_METHODS`
+lists methods that need a target layer; `base_method_name()` maps a variant to
+its `xai_config.yaml` section. The selector's `METHOD_NAMES` stay the four
+original methods.
 
 Important notes:
 
@@ -339,6 +372,9 @@ Important notes:
 - G-CAME `gaussian_sigma` is a bbox-scale fraction. Default is `0.35`.
 - D-CLOSE and LIME use neutral fill value `114` for masked regions.
 - LIME kernel distance is normalized by number of superpixels.
+- LIME and D-CLOSE batch their detector forwards with the method's `batch_size`
+  (`_forward_detector_batch`); batch size changes speed only, not the map.
+- Explainers set `SaliencyMap.is_fallback` when the bbox prior replaces a failed map.
 
 ### `src/xai_selector.py`
 
@@ -397,6 +433,17 @@ Sparsity  1/3
 
 Do not casually change composite definitions or weights. They are paper-facing.
 
+`insertion_deletion` is vectorised and returns the same values as the original
+per-pixel loop (see `tests/test_evaluator_curves.py`); `metrics.over_all.batch_size`
+> 1 batches the perturbation forwards without changing values.
+
+`evaluate_evidence()` (v2 experiments only) returns all `evaluate_all` metrics
+plus the insertion/deletion curves, the box-relative protocol (`*_box`: pixels
+ranked and perturbed only inside the detection box scaled by
+`metrics.over_all_box.context_scale`, everything else kept original) and
+`pg_gt`/`ebpg_gt` for an annotated box. `composite_box` is a sensitivity column,
+never the paper-facing composite.
+
 ### `src/threshold.py`
 
 Public API:
@@ -437,7 +484,26 @@ low EBPG -> decrease NMS threshold
 low OA   -> increase confidence threshold
 ```
 
-The loop stores VLM assessments and selector reasoning in `FeedbackResult`.
+Evaluate-then-escalate cascade (config `feedback.escalation`, **off by
+default**): when a detection's composite falls below the detector's `tau`
+(`escalation.tau_by_detector[detector.model_name]`, falling back to
+`escalation.tau`), the backup method runs and the better-scoring map is kept
+(keep-max never decreases the selection metric for the same detections).
+Calibrate `tau_by_detector` with `scripts/calibrate_tau.py` on a manifest
+split disjoint from every test split, and freeze it in config — never compute
+it from test images. Recalibrate whenever `composite_weights` change.
+
+`feedback.fixed_method` bypasses the selector (e.g. `gcame` + escalation gives
+the always-G-CAME -> backup cascade). `num_escalations` counts the returned
+iteration only.
+
+Optional `feedback.vlm_fp_filter` skips explaining VLM-flagged false
+positives; flags from iteration 0 are re-applied to re-detections by class and
+IoU. `run_baseline.py` has no VLM, so an FP-filtered pipeline run is not
+comparable to fixed baselines; in v2 the VLM is an evidence feature instead.
+
+The loop stores VLM assessments, selector reasoning, and `num_escalations`
+in `FeedbackResult`.
 
 ### `src/pipeline.py`
 
@@ -455,6 +521,10 @@ Important behavior:
 - VLM remains resident until `shutdown()` to avoid repeated 10-20 second reloads.
 - Detector model comes from `detector.primary.name` unless `detector_model_name` override is passed.
 - Selector checkpoint is chosen per detector when available.
+- `feedback_overrides` is deep-merged over `eval_config.yaml: evaluation.feedback`
+  (`run_experiments.py --max-iterations/--fixed-method/--escalation`).
+- `use_vlm=False` (`--no-vlm`) skips loading the VLM; scene complexity then comes
+  from detector statistics, which is also the selector's training feature.
 
 ### `src/pipeline_io.py`
 
@@ -545,7 +615,24 @@ composite_weights:
 feedback.threshold_mode: "percentile"
 feedback.threshold_percentile: 40
 feedback.max_iterations: 3
+metrics.over_all.batch_size: 1          # >1 = batched forwards, same values
+metrics.over_all_box.context_scale: 2.0  # box-relative protocol (evaluate_evidence only)
+feedback.vlm_fp_filter: false
+feedback.fixed_method: null
+feedback.escalation.enabled: false
+feedback.escalation.backup_method: "lime"
+feedback.escalation.tau_by_detector:     # provisional until calibrate_tau.py on the calib split
+  yolox-s: 0.6546
+  fasterrcnn_resnet50_fpn_v2: 0.6922
 ```
+
+### `config/evidence_config.yaml` / `evidence_config_lite.yaml`
+
+Top-level keys `evidence` (methods, controls, shuffled maps, agreement pairs,
+gradient features, `max_explained_per_image`, saved maps), `vlm_verification`
+and `analysis` (CV folds, bootstrap, gate `gate_delta_auroc: 0.02`, conformal
+`crc_alpha`, acquisition budgets). Freeze the lite config and gate thresholds
+before the test split is run.
 
 ## Script Guide
 
@@ -584,8 +671,12 @@ Oracle labeling protocol:
 
 1. Run all configured XAI methods for each selected detection.
 2. Evaluate each method with annotation-free metrics.
-3. Normalize EBPG, OA, and Sparsity across the dataset.
-4. Assign the oracle label as the method with highest equal-weight composite.
+3. Compute each method's composite on RAW metric values exactly as
+   `AutoEvaluator.composite_score` does, with weights read from
+   `config/eval_config.yaml:composite_weights` (single source of truth —
+   the training target always equals the reported metric).
+4. Assign the oracle label as the argmax composite; drop detections whose
+   top-1 vs top-2 margin is below 0.02 (raw scale) as ambiguous.
 5. Train the MLP from pre-explanation features only.
 
 ### Run Full Pipeline Experiments
@@ -653,6 +744,38 @@ python scripts/generate_figures.py \
   --figures-dir results/figures
 ```
 
+Synthetic placeholder data is off by default (`--allow-synthetic` to enable;
+never for paper figures).
+
+### v2 Explanation-As-Evidence Runs
+
+`RESULTS_AND_PLAN.md` (Part B) is the runbook; every job is defined once in `cluster/task.sh`
+and launched with `cluster/submit.sh <stage>` (SLURM arrays or local GPUs).
+
+```bash
+python scripts/make_manifests.py --images-dir data/coco/val2017 \
+  --annotations data/coco/annotations/instances_val2017.json \
+  --splits dev:300,calib:1000,test:2000 --output manifests/coco_val2017_v2.json
+
+python scripts/run_evidence.py --images-dir data/coco/val2017 \
+  --annotations data/coco/annotations/instances_val2017.json \
+  --image-list manifests/coco_val2017_v2.json --split dev \
+  --detector-model yolox-s --run-name coco_dev_yolox-s --num-shards 4 --shard-index 0
+
+python scripts/run_vlm_verification.py --run-dir results/evidence/coco_dev_yolox-s \
+  --images-dir data/coco/val2017
+
+python scripts/analyze_evidence.py --run-dirs results/evidence/coco_dev_yolox-s \
+  --output-dir results/analysis/evidence_coco_dev
+python scripts/analyze_metric_validity.py --run-dirs results/evidence/coco_dev_yolox-s \
+  --output-dir results/analysis/metric_validity_coco_dev
+```
+
+Evidence features never use GT-derived columns (`*_gt`, `iou_gt`, labels); GT
+is only the TP/FP endpoint. `run_experiments.py` and `run_baseline.py` accept
+`--image-list/--split` and write `manifest.json`; `run_experiments.py` also
+writes `detections.csv` (chosen method, escalation outcome, fallback flag).
+
 ## Notebook Guide
 
 Notebook paths are relative to `notebooks/`.
@@ -662,9 +785,17 @@ Notebook paths are relative to `notebooks/`.
 01_explore_detections.ipynb   YOLOX qualitative detection exploration
 02_vlm_judge_analysis.ipynb   VLM quality and complexity analysis
 03_xai_comparison.ipynb       XAI method comparison
-04_run_all_experiments.ipynb  full experiment runner, selector training, 3000-image evaluation, exports
-05_results_visualization.ipynb figures and ablation tables from saved outputs
+04_run_all_experiments.ipynb  v1 (legacy) experiment runner, selector training, exports
+05_results_visualization.ipynb v1 (legacy) figures and ablation tables
+06_v2_setup_and_smoke.ipynb   v2: env/data/manifests, 3-image smoke run, real-model checks, budget
+07_v2_run_experiments.ipynb   v2: stages 1-5 via cluster/submit.sh, D1 decisions, tau, freeze check
+08_v2_analysis_and_figures.ipynb v2: gates B/G1-G3, abstention, subgroups, qualitative, v1 rows (CPU)
 ```
+
+v2 notebooks never define experiment commands: they call `cluster/task.sh` /
+`cluster/submit.sh` through `src/notebook_utils.py`, so a notebook run and a
+cluster run execute the same commands. Only notebook 06 section 5 runs model
+code in the kernel (needs a GPU kernel). Commit notebooks without outputs.
 
 Keep committed notebooks clean unless the user asks for executed outputs. Expensive notebooks use caches under `data/`.
 
@@ -680,6 +811,20 @@ Fast unit tests:
 
 ```bash
 pytest tests/test_threshold.py tests/test_evaluator.py tests/test_feedback_loop.py tests/test_pipeline.py -q
+```
+
+v2 tests (CPU, toy detector in `tests/toy_models.py`):
+
+```bash
+pytest tests/test_evaluator_curves.py tests/test_gt_matching.py tests/test_controls.py \
+  tests/test_evidence_features.py tests/test_evidence_pipeline.py tests/test_batched_explainers.py \
+  tests/test_provenance.py tests/test_notebook_helpers.py -q
+```
+
+Everything that does not need a GPU or model download:
+
+```bash
+pytest -m "not slow" tests -q
 ```
 
 Selector tests:
@@ -810,3 +955,8 @@ Use this language in docs and paper-facing outputs:
 - Adaptive thresholding makes feedback decisions robust to score distribution shifts across domains.
 - Percentile thresholding is the out-of-the-box adaptive mode; learned thresholding is a calibration baseline.
 - Composite quality uses equal weights over EBPG, normalized OA, and Sparsity.
+- v2: explanations are used as evidence to verify detections; verification is
+  scored against annotated boxes (TP/FP, AP), while the explanation metrics
+  themselves stay annotation-free. Do not describe the evidence model as
+  annotation-free during development: it is supervised by GT labels offline and
+  annotation-free only at inference.

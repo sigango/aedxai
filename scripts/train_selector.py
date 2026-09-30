@@ -50,7 +50,7 @@ class SelectorTrainingConfig:
     checkpoint_every: int = 100
     resume: bool = False
     oracle_mode: bool = True
-    oracle_margin_threshold: float = 0.05
+    oracle_margin_threshold: float = 0.02
     drop_ambiguous: bool = True
     sample_seed: int = 42
     methods: list[str] = field(default_factory=lambda: list(METHOD_NAMES))
@@ -110,18 +110,18 @@ class SelectorTrainingRunner:
 
     Oracle Labeling Protocol (Section 3.3 of the paper):
         For each detection in the training corpus, ALL four XAI methods
-        (GradCAM, G-CAME, D-CLOSE, LIME) are exhaustively evaluated.
-        Oracle labels are assigned with a local faithfulness-aware rule:
-            1. For each detection, EBPG / OA / Sparsity are normalized
-               ACROSS METHODS for that detection only.
-            2. The oracle score is:
-                   0.55 * OA_local + 0.25 * EBPG_local + 0.20 * Sparsity_local
-            3. The method with the highest oracle score becomes the label.
-            4. Ambiguous detections with top-1 vs top-2 oracle margin below
-               `oracle_margin_threshold` are dropped by default.
+        (GradCAM, G-CAME, D-CLOSE, LIME) are exhaustively evaluated with the
+        annotation-free metrics. The oracle label is the method with the
+        highest paper-facing composite, computed on RAW metric values exactly
+        as src.evaluator.AutoEvaluator.composite_score does:
 
-        This replaces the older global-equal oracle that tended to collapse
-        toward G-CAME due to bbox-centric plausibility bias.
+            composite = w_ebpg * EBPG + w_oa * (OA + 1) / 2 + w_sparsity * Sparsity
+
+        with weights read from config/eval_config.yaml:composite_weights.
+        The training target and the reported evaluation metric are therefore
+        identical by construction (single source of truth). Detections whose
+        top-1 vs top-2 composite margin is below `oracle_margin_threshold`
+        (raw scale) are dropped as ambiguous.
 
         The selector MLP is then trained to predict this label from
         pre-explanation context features only:
@@ -151,7 +151,7 @@ class SelectorTrainingRunner:
             logger.info(
                 "Oracle labeling mode enabled: all configured XAI methods will be "
                 "run on every selected detection to generate offline oracle labels. "
-                "Using local faithfulness-aware relabeling with margin threshold %.3f%s.",
+                "Labels use the evaluator-scale composite with margin threshold %.3f%s.",
                 self.config.oracle_margin_threshold,
                 " (dropping ambiguous detections)" if self.config.drop_ambiguous else "",
             )
@@ -320,94 +320,41 @@ class SelectorTrainingRunner:
         if not present_columns:
             return dataframe
 
-        # Keep global normalized composites for downstream diagnostics/backward
-        # compatibility only. They are NOT used for oracle labels.
-        for metric_name in ("ebpg", "oa", "sparsity"):
-            metric_columns = [f"{metric_name}_{method_name}" for method_name in METHOD_NAMES if f"{metric_name}_{method_name}" in dataframe.columns]
-            if not metric_columns:
-                continue
-            values = dataframe[metric_columns].to_numpy(dtype=np.float32)
-            metric_min = float(np.nanmin(values))
-            metric_max = float(np.nanmax(values))
-            scale = metric_max - metric_min + 1e-8
-            for method_name in METHOD_NAMES:
-                column = f"{metric_name}_{method_name}"
-                if column in dataframe.columns:
-                    dataframe[f"{metric_name}_norm_{method_name}"] = (dataframe[column] - metric_min) / scale
-
-        available_methods = [
-            method_name
-            for method_name in METHOD_NAMES
-            if all(
-                column in dataframe.columns
-                for column in (
-                    f"ebpg_norm_{method_name}",
-                    f"oa_norm_{method_name}",
-                    f"sparsity_norm_{method_name}",
-                )
-            )
-        ]
-
-        if len(available_methods) == len(METHOD_NAMES):
-            composites = []
-            for method_name in METHOD_NAMES:
-                composite = (
-                    dataframe[f"ebpg_norm_{method_name}"]
-                    + dataframe[f"oa_norm_{method_name}"]
-                    + dataframe[f"sparsity_norm_{method_name}"]
-                ) / 3.0
-                dataframe[f"composite_{method_name}"] = composite
-                composites.append(composite.to_numpy())
-
-            # Diagnostic only: these scores are globally normalized and should
-            # not be interpreted as the selector's training target.
-            logger.info("=== PER-METHOD GLOBAL DIAGNOSTIC SCORES (NOT ORACLE TARGETS) ===")
-            for method_name in METHOD_NAMES:
-                col = f"composite_{method_name}"
-                if col in dataframe.columns:
-                    logger.info(
-                        "  %-10s  mean_score=%.4f  std=%.4f",
-                        method_name,
-                        float(dataframe[col].mean()),
-                        float(dataframe[col].std()),
-                    )
-
-            local_metric_scores: dict[str, np.ndarray] = {}
-            raw_metric_matrices: dict[str, np.ndarray] = {}
-            for metric_name in ("ebpg", "oa", "sparsity"):
-                metric_matrix = np.stack(
-                    [
-                        dataframe[f"{metric_name}_{method_name}"].to_numpy(dtype=np.float32)
-                        for method_name in METHOD_NAMES
-                    ],
-                    axis=1,
-                )
-                raw_metric_matrices[metric_name] = metric_matrix
-                row_min = metric_matrix.min(axis=1, keepdims=True)
-                row_max = metric_matrix.max(axis=1, keepdims=True)
-                row_scale = row_max - row_min
-                normalized = (metric_matrix - row_min) / (row_scale + 1e-8)
-                constant_rows = (row_scale[:, 0] < 1e-8)
-                if np.any(constant_rows):
-                    normalized[constant_rows] = 0.0
-                local_metric_scores[metric_name] = normalized.astype(np.float32)
-
-            oa_spread = raw_metric_matrices["oa"].max(axis=1) - raw_metric_matrices["oa"].min(axis=1)
-            logger.info(
-                "OA spread across methods: mean=%.4f  median=%.4f  pct(<0.10)=%.1f%%",
-                float(np.mean(oa_spread)),
-                float(np.median(oa_spread)),
-                float(np.mean(oa_spread < 0.10) * 100.0),
-            )
-
-            oracle_matrix = (
-                0.25 * local_metric_scores["ebpg"]
-                + 0.55 * local_metric_scores["oa"]
-                + 0.20 * local_metric_scores["sparsity"]
+        # Oracle objective == paper-facing composite (single source of truth).
+        # Weights come from config/eval_config.yaml:composite_weights and the
+        # normalization mirrors src.evaluator.AutoEvaluator.composite_score.
+        have_all_methods = all(column in dataframe.columns for column in required_columns)
+        if have_all_methods:
+            weights = self._composite_weights()
+            oracle_matrix = np.stack(
+                [
+                    (
+                        weights["ebpg"] * dataframe[f"ebpg_{method_name}"].clip(0.0, 1.0)
+                        + weights["oa"] * ((dataframe[f"oa_{method_name}"] + 1.0) / 2.0).clip(0.0, 1.0)
+                        + weights["sparsity"] * dataframe[f"sparsity_{method_name}"].clip(0.0, 1.0)
+                    ).to_numpy(dtype=np.float32)
+                    for method_name in METHOD_NAMES
+                ],
+                axis=1,
             ).astype(np.float32)
 
             for method_index, method_name in enumerate(METHOD_NAMES):
+                dataframe[f"composite_{method_name}"] = oracle_matrix[:, method_index]
                 dataframe[f"oracle_score_{method_name}"] = oracle_matrix[:, method_index]
+
+            logger.info(
+                "=== PER-METHOD MEAN COMPOSITE (evaluator scale, weights ebpg=%.3f oa=%.3f sparsity=%.3f) ===",
+                weights["ebpg"],
+                weights["oa"],
+                weights["sparsity"],
+            )
+            for method_index, method_name in enumerate(METHOD_NAMES):
+                logger.info(
+                    "  %-10s  mean=%.4f  std=%.4f",
+                    method_name,
+                    float(oracle_matrix[:, method_index].mean()),
+                    float(oracle_matrix[:, method_index].std()),
+                )
 
             best_indices = np.argmax(oracle_matrix, axis=1).astype(np.int64)
             best_method_names = np.asarray(METHOD_NAMES, dtype=object)[best_indices]
@@ -416,26 +363,25 @@ class SelectorTrainingRunner:
             second_scores = sorted_scores[:, -2] if oracle_matrix.shape[1] > 1 else np.zeros_like(top_scores)
             oracle_margin = top_scores - second_scores
             oracle_is_ambiguous = oracle_margin < float(self.config.oracle_margin_threshold)
-            fully_flat_rows = (
-                (raw_metric_matrices["ebpg"].max(axis=1) - raw_metric_matrices["ebpg"].min(axis=1) < 1e-8)
-                & (raw_metric_matrices["oa"].max(axis=1) - raw_metric_matrices["oa"].min(axis=1) < 1e-8)
-                & (raw_metric_matrices["sparsity"].max(axis=1) - raw_metric_matrices["sparsity"].min(axis=1) < 1e-8)
-            )
 
             dataframe["best_method_label"] = best_indices
             dataframe["best_method_name"] = best_method_names
             dataframe["oracle_margin"] = oracle_margin.astype(np.float32)
             dataframe["oracle_is_ambiguous"] = oracle_is_ambiguous.astype(bool)
 
+            logger.info(
+                "Oracle upper bound (mean best composite): %.4f | best fixed method mean: %.4f",
+                float(top_scores.mean()),
+                float(oracle_matrix.mean(axis=0).max()),
+            )
+
             if self.config.drop_ambiguous:
                 dropped = int(oracle_is_ambiguous.sum())
                 if dropped > 0:
                     logger.info(
-                        "Dropping %d ambiguous detections with oracle margin < %.3f "
-                        "(including %d fully-flat rows).",
+                        "Dropping %d ambiguous detections with oracle margin < %.3f (raw scale).",
                         dropped,
                         self.config.oracle_margin_threshold,
-                        int(fully_flat_rows.sum()),
                     )
                 dataframe = dataframe.loc[~oracle_is_ambiguous].copy()
                 if dataframe.empty:
@@ -446,10 +392,11 @@ class SelectorTrainingRunner:
 
             self._log_oracle_distribution(dataframe)
         else:
+            missing = [column for column in required_columns if column not in dataframe.columns]
             logger.warning(
-                "Only methods %s are present in progress data. "
+                "Metric columns %s are missing from progress data. "
                 "Best-method labels will be deferred until all methods are available.",
-                available_methods,
+                missing,
             )
 
         if "best_method_label" in dataframe.columns:
@@ -472,6 +419,23 @@ class SelectorTrainingRunner:
             return dataframe[final_columns]
 
         return dataframe
+
+    def _composite_weights(self) -> dict[str, float]:
+        """Read the paper-facing composite weights from the evaluation config."""
+        equal_weight = round(1.0 / 3.0, 6)
+        weights = dict(
+            (self.eval_config or {}).get(
+                "composite_weights",
+                {"ebpg": equal_weight, "oa": equal_weight, "sparsity": equal_weight},
+            )
+        )
+        if "ebpg" not in weights and "pg" in weights:
+            weights["ebpg"] = weights.pop("pg")
+        return {
+            "ebpg": float(weights.get("ebpg", equal_weight)),
+            "oa": float(weights.get("oa", equal_weight)),
+            "sparsity": float(weights.get("sparsity", equal_weight)),
+        }
 
     @staticmethod
     def _log_oracle_distribution(dataframe: pd.DataFrame) -> None:
@@ -657,10 +621,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--oracle-margin-threshold",
         type=float,
-        default=0.05,
+        default=0.02,
         help=(
-            "Drop detections whose top-1 vs top-2 oracle score gap is smaller than "
-            "this threshold. Higher values produce cleaner but smaller training sets."
+            "Drop detections whose top-1 vs top-2 composite gap (raw evaluator "
+            "scale) is smaller than this threshold. Higher values produce "
+            "cleaner but smaller training sets."
         ),
     )
     parser.add_argument(

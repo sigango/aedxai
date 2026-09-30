@@ -22,8 +22,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.detector import DetectorWrapper
 from src.evaluator import AutoEvaluator, EvalResult
+from src.provenance import resolve_image_paths, write_manifest
 from src.utils import load_image, set_seed, setup_logging
-from src.xai_methods import get_explainer
+from src.xai_methods import CAM_METHODS, base_method_name, get_explainer
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,8 @@ class BaselineRunConfig:
     detector_config: Path
     xai_config: Path
     eval_config: Path
+    image_list: Path | None = None
+    split: str | None = None
 
 
 def _as_project_path(path: str | Path) -> Path:
@@ -61,6 +64,8 @@ def _row_from_eval_results(
     num_detections: int,
     evaluation_results: list[EvalResult],
     has_error: bool,
+    explain_time: float = 0.0,
+    num_fallback: int = 0,
 ) -> dict[str, Any]:
     """Create one baseline CSV row from per-detection EvalResults."""
     composite_score = _mean_metric(evaluation_results, "composite")
@@ -76,6 +81,8 @@ def _row_from_eval_results(
         "mean_sparsity": _mean_metric(evaluation_results, "sparsity"),
         "mean_insertion_auc": _mean_metric(evaluation_results, "insertion_auc"),
         "mean_deletion_auc": _mean_metric(evaluation_results, "deletion_auc"),
+        "explain_time": float(explain_time),
+        "num_fallback": int(num_fallback),
         "total_time": float(sum(float(result.computation_time) for result in evaluation_results)),
         "has_error": bool(has_error),
     }
@@ -85,7 +92,15 @@ def summarize_results(dataframe: pd.DataFrame, title: str = "Baseline Summary") 
     """Compute and print aggregate metrics for a baseline dataframe."""
     total = int(len(dataframe))
     summary: dict[str, Any] = {"count": total}
-    metric_columns = ["composite_score", "mean_pg", "mean_oa", "mean_sparsity", "iterations", "total_time"]
+    metric_columns = [
+        "composite_score",
+        "mean_pg",
+        "mean_oa",
+        "mean_sparsity",
+        "iterations",
+        "explain_time",
+        "total_time",
+    ]
 
     print(f"\n=== {title} ===")
     print(f"Images processed: {total}")
@@ -112,9 +127,12 @@ def _load_xai_method_config(path: Path, method_name: str) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
     methods = raw.get("xai", {}).get("methods", {})
-    if method_name not in methods:
+    section_name = base_method_name(method_name)
+    if section_name not in methods:
+        if section_name in {"bbox_prior", "center_prior", "random"}:
+            return {}
         raise KeyError(f"XAI method '{method_name}' not found in {path}")
-    return dict(methods[method_name])
+    return dict(methods[section_name])
 
 
 def run_baseline(config: BaselineRunConfig) -> pd.DataFrame:
@@ -123,7 +141,13 @@ def run_baseline(config: BaselineRunConfig) -> pd.DataFrame:
     setup_logging(config.log_level)
     config.output.mkdir(parents=True, exist_ok=True)
 
-    image_paths = sorted(config.images_dir.glob("*.jpg"))[: config.num_images]
+    image_paths = resolve_image_paths(
+        config.images_dir,
+        image_list=config.image_list,
+        split=config.split,
+        num_images=config.num_images,
+        extensions=(".jpg",),
+    )
     if not image_paths:
         raise FileNotFoundError(f"No .jpg images found in {config.images_dir}")
 
@@ -132,7 +156,15 @@ def run_baseline(config: BaselineRunConfig) -> pd.DataFrame:
     method_config = _load_xai_method_config(config.xai_config, config.xai_method)
     explainer = get_explainer(config.xai_method, method_config)
     evaluator = AutoEvaluator(str(config.eval_config))
-    target_layer = detector.get_target_layer() if config.xai_method in {"gradcam", "gcame"} else None
+    target_layer = detector.get_target_layer() if config.xai_method in CAM_METHODS else None
+    write_manifest(
+        config.output,
+        entry_point="scripts/run_baseline.py",
+        args={key: getattr(config, key) for key in config.__slots__},
+        config_paths={"detector": config.detector_config, "xai": config.xai_config, "eval": config.eval_config},
+        image_names=[path.name for path in image_paths],
+        file_name=f"manifest_{config.detector_model}_{config.xai_method}.json",
+    )
 
     rows: list[dict[str, Any]] = []
     try:
@@ -142,9 +174,13 @@ def run_baseline(config: BaselineRunConfig) -> pd.DataFrame:
                 detections = detector.detect(image)
                 model = detector.get_model()
                 eval_results: list[EvalResult] = []
+                explain_time = 0.0
+                num_fallback = 0
 
                 for detection in detections:
                     saliency = explainer.explain(model, image, detection, target_layer)
+                    explain_time += float(getattr(saliency, "computation_time", 0.0))
+                    num_fallback += int(bool(getattr(saliency, "is_fallback", False)))
                     eval_result = evaluator.evaluate_all(
                         saliency_map=saliency,
                         bbox=detection.bbox,
@@ -160,6 +196,8 @@ def run_baseline(config: BaselineRunConfig) -> pd.DataFrame:
                         num_detections=len(detections),
                         evaluation_results=eval_results,
                         has_error=False,
+                        explain_time=explain_time,
+                        num_fallback=num_fallback,
                     )
                 )
             except Exception as exc:
@@ -196,7 +234,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--images-dir", type=str, default="data/coco/val2017")
     parser.add_argument("--num-images", type=int, default=1000)
     parser.add_argument("--output", type=str, default="results/baseline")
-    parser.add_argument("--xai-method", type=str, default="gradcam", choices=["gradcam", "gcame", "dclose", "lime"])
+    parser.add_argument(
+        "--xai-method",
+        type=str,
+        default="gradcam",
+        choices=["gradcam", "gcame", "dclose", "lime", "gcame_raw", "gradcam_raw", "bbox_prior", "center_prior", "random"],
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--log-level", type=str, default="INFO")
     parser.add_argument(
@@ -209,6 +252,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--detector-config", type=str, default="config/detector_config.yaml")
     parser.add_argument("--xai-config", type=str, default="config/xai_config.yaml")
     parser.add_argument("--eval-config", type=str, default="config/eval_config.yaml")
+    parser.add_argument("--image-list", type=str, default=None, help="Manifest from scripts/make_manifests.py.")
+    parser.add_argument("--split", type=str, default=None, help="Split inside --image-list (e.g. test).")
     return parser
 
 
@@ -226,6 +271,8 @@ def main() -> None:
         detector_config=_as_project_path(args.detector_config),
         xai_config=_as_project_path(args.xai_config),
         eval_config=_as_project_path(args.eval_config),
+        image_list=_as_project_path(args.image_list) if args.image_list else None,
+        split=args.split,
     )
     run_baseline(config)
 
