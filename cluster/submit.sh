@@ -79,12 +79,13 @@ stage() {
     vlm-bdd) for d in yolox frcnn; do launch "vlm-bdd-${d}" "${SHARDS_VLM}" gpu; done ;;
     selector) for d in yolox frcnn; do launch "selector-${d}" 1 gpu; done ;;
     legacy)
+      # Per-detector method and variant lists (cluster.env); defaults = every v1 row.
       for d in yolox frcnn; do
-        for m in gradcam gcame dclose lime; do launch "baseline-${d}-${m}" 1 gpu; done
-        launch "aedxai-${d}-v1" 1 gpu
-        launch "aedxai-${d}-v1orig" 1 gpu
+        methods_var="LEGACY_METHODS_${d}" variants_var="LEGACY_VARIANTS_${d}"
+        for m in ${!methods_var-gradcam gcame dclose lime}; do launch "baseline-${d}-${m}" 1 gpu; done
+        for v in ${!variants_var-v1 v1orig}; do launch "aedxai-${d}-${v}" 1 gpu; done
       done ;;
-    cascade) for d in yolox frcnn; do launch "aedxai-${d}-cascade" 1 gpu; done ;;
+    cascade) for d in ${CASCADE_DETECTORS-yolox frcnn}; do launch "aedxai-${d}-cascade" 1 gpu; done ;;
     analyze-pilot|analyze-test|analyze-bdd|calibrate-tau) launch "$1" 1 cpu ;;
     *) echo "unknown stage '$1'" >&2; exit 2 ;;
   esac

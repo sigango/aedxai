@@ -24,6 +24,18 @@ evidence:
 
   # Riedlinger-style gradient features (one extra forward+backward per detection).
   gradient_features: true
+  # Strong baselines, computed for every detection (cheap tier):
+  # MetaDetect pre-NMS candidate statistics (one extra forward with NMS off) and
+  # test-time-augmentation stability (one forward per view). Riedlinger-style
+  # head gradients come with gradient_features.
+  prenms:
+    enabled: true
+    conf_thresh: 0.01
+    max_candidates: 3000
+  tta:
+    enabled: true
+    conf_thresh: 0.05
+    views: [hflip, shrink, shift, dark]
   # D-CLOSE mask budget: false = num_masks_dev (200), true = num_masks_final (2000).
   dclose_final_masks: false
 

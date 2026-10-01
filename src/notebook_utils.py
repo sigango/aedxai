@@ -236,11 +236,13 @@ def estimate_gpu_hours(
 
 
 def suggest_lite_methods(analysis_dir: str | Path, run: str, min_gain: float = 0.005) -> pd.DataFrame:
-    """Rank methods by AUROC gain over S2 when added alone, and by gain per second of cost."""
+    """Rank methods by AUROC gain over the S2 baseline when added alone, and by gain per second."""
     analysis_dir = Path(analysis_dir)
     metrics = pd.read_csv(analysis_dir / f"g1_metrics_{run}.csv").set_index("set")
     value = pd.read_csv(analysis_dir / f"g2_method_value_{run}.csv")
-    base = float(metrics.loc["S2_output_gradient", "auroc"])
+    # The single-method sets are built on S2_baseline; older analyses only have S2_output_gradient.
+    base_set = "S2_baseline" if "S2_baseline" in metrics.index else "S2_output_gradient"
+    base = float(metrics.loc[base_set, "auroc"])
     value["auroc_gain_over_S2"] = value["auroc_single"] - base
     value["cost_s"] = value["explain_time_s"] + value["eval_time_s"]
     value["gain_per_second"] = value["auroc_gain_over_S2"] / value["cost_s"].clip(lower=1e-6)

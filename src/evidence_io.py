@@ -120,6 +120,14 @@ def detections_frame(run_dirs: Iterable[str | Path], include_unexplained: bool =
                 row[f"out__{key}"] = value
             for key, value in dict(det.get("gradient") or {}).items():
                 row[f"grad__{key}"] = value
+            for key, value in dict(det.get("prenms") or {}).items():
+                row[f"pre__{key}"] = value
+            for key, value in dict(det.get("tta") or {}).items():
+                row[f"tta__{key}"] = value
+            # Per-detection share of the image-level cost of the cheap baseline tier (never a feature).
+            num_dets = max(1, len(image_record.get("detections", [])))
+            row["cost__prenms_s"] = float(image_record.get("prenms_time", 0.0)) / num_dets
+            row["cost__tta_s"] = float(image_record.get("tta_time", 0.0)) / num_dets
             for method, record in dict(det.get("methods", {})).items():
                 for key in SCALAR_METHOD_KEYS:
                     if key in record:

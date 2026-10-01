@@ -55,8 +55,10 @@ evidence() {  # evidence <split> <det_key> <config> <images> <ann> <manifest> <r
   local split="$1" det_key="$2" det; det="$(det_name "$2")"
   local config="$3" images="$4" ann="$5" manifest="$6" prefix="$7"
   shift 7
-  # Optional per-detector image cap, e.g. TEST_NUM_IMAGES_frcnn=1000 (0/empty = whole split).
+  # Optional per-detector image cap, e.g. NUM_IMAGES_test_frcnn=1000 (0/empty = whole split).
+  # BDD100K also uses the "test" split, so it has its own cap: NUM_IMAGES_bdd_<det>.
   local cap_var="NUM_IMAGES_${split}_${det_key}"
+  if [[ "${prefix}" == "bdd" ]]; then cap_var="NUM_IMAGES_bdd_${det_key}"; fi
   if [[ "${prefix}" == "smoke" ]]; then SMOKE_IMAGES="${SMOKE_IMAGES:-3}"; cap_var="SMOKE_IMAGES"; fi
   run scripts/run_evidence.py \
     --images-dir "${images}" --annotations "${ann}" --image-list "${manifest}" --split "${split}" \

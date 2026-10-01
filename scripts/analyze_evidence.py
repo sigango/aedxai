@@ -3,18 +3,23 @@
 Reads one or more evidence runs (``scripts/run_evidence.py``, optionally joined
 with ``scripts/run_vlm_verification.py``) and, per detector:
 
-G1  Does explanation evidence predict TP vs FP beyond output and gradient
-    uncertainty? Image-grouped K-fold out-of-fold predictions for nested feature
-    sets, AUROC/AUPRC/FPR@95/ECE, and a paired image bootstrap for the AUROC gain
-    of explanation features over the output+gradient baseline. Placebo sets use
-    only model-free control maps, so a gain can be attributed to explanation
-    content rather than to perturbation probing alone.
+G1  Does explanation evidence predict TP vs FP beyond output, gradient and
+    augmentation uncertainty? Image-grouped K-fold out-of-fold predictions for
+    nested feature sets, AUROC/AUPRC/FPR@95/ECE, and a paired image bootstrap for
+    the AUROC gain of explanation features over the strong baseline
+    ``S2_baseline`` (post-NMS output + pre-NMS candidates [MetaDetect] +
+    gradients [Riedlinger-style] + test-time augmentation). The original
+    output+gradient-lite comparison (``S3_lite - S2_output_gradient``) is kept as
+    a secondary gate. Placebo sets use only model-free control maps, and the
+    ``S3_map_only`` / ``S3_curves_only`` sets split map structure from
+    perturbation probing, so a gain can be attributed to explanation content.
 G2  Budget-aware evidence acquisition: when only a fraction of detections can
     get the expensive tier, does choosing them by predicted value of information
     beat uncertainty and random choice at the same compute?
 G3  Does re-scoring detections with the evidence model raise AP (re-matched)?
 Plus conformal risk control abstention (per-image accepted-FP rate <= alpha)
-with per-subgroup TP coverage, and per-subgroup AUROC.
+with per-subgroup TP coverage, per-subgroup AUROC, and AUROC per FP type
+(TP vs background / classification / localization / duplicate FPs).
 
 GT-derived columns (``*_gt``, ``iou_gt``, labels) are never used as features.
 
@@ -48,20 +53,16 @@ logger = logging.getLogger("analyze_evidence")
 
 CONTROLS = ("bbox_prior", "center_prior", "random")
 EXCLUDED_SUBSTRINGS = ("_gt", "explain_time", "eval_time", "grad_time", "vlm__time", "grad_score")
-METHOD_METRICS = (
-    "pg",
-    "ebpg",
-    "oa",
-    "insertion_auc",
-    "deletion_auc",
-    "sparsity",
-    "composite",
-    "oa_box",
-    "insertion_auc_box",
-    "deletion_auc_box",
-    "composite_box",
-    "is_fallback",
-)
+# Map-structure metrics need no perturbation forwards; curve metrics are perturbation probes.
+MAP_METRICS = ("pg", "ebpg", "sparsity", "is_fallback")
+CURVE_METRICS = ("oa", "insertion_auc", "deletion_auc", "oa_box", "insertion_auc_box", "deletion_auc_box")
+# The composites mix both kinds, so they only enter the full explanation sets.
+METHOD_METRICS = MAP_METRICS + CURVE_METRICS + ("composite", "composite_box")
+# CAM methods: one backward pass per map, no perturbation forwards.
+CAM_MAP_METHODS = ("gcame", "gcame_raw", "gradcam", "gradcam_raw")
+GATE = ("S3_explanation", "S2_baseline")
+SECONDARY_GATE = ("S3_lite", "S2_output_gradient")
+MAIN_SETS = ("S0_confidence", "S2_output_gradient", "S2_baseline", "S3_explanation", "S4_explanation_vlm")
 
 
 # ----------------------------------------------------------------------------- features
@@ -84,33 +85,74 @@ def methods_in(frame: pd.DataFrame) -> tuple[list[str], list[str]]:
     return [name for name in names if name not in controls], controls
 
 
-def method_columns(frame: pd.DataFrame, methods: list[str]) -> list[str]:
+def method_columns(
+    frame: pd.DataFrame,
+    methods: list[str],
+    metrics: tuple[str, ...] = METHOD_METRICS,
+    prefixes: tuple[str, ...] = ("mf", "cf", "cfb"),
+    agreement: bool = True,
+) -> list[str]:
+    """Explanation columns of ``methods``: scalar metrics, map/curve features, agreements."""
     columns: list[str] = []
     for method in methods:
-        columns += [f"m__{method}__{metric}" for metric in METHOD_METRICS]
-        columns += [c for c in frame.columns if c.startswith((f"mf__{method}__", f"cf__{method}__", f"cfb__{method}__"))]
-    for column in frame.columns:
-        if column.startswith("ag__"):
-            first, second = column.split("__")[1:3]
-            if first in methods and second in methods:
-                columns.append(column)
+        columns += [f"m__{method}__{metric}" for metric in metrics]
+        columns += [c for c in frame.columns if c.startswith(tuple(f"{prefix}__{method}__" for prefix in prefixes))]
+    if agreement:
+        for column in frame.columns:
+            if column.startswith("ag__"):
+                first, second = column.split("__")[1:3]
+                if first in methods and second in methods:
+                    columns.append(column)
     return _numeric(frame, columns)
 
 
+def _prefixed(frame: pd.DataFrame, prefix: str) -> list[str]:
+    return _numeric(frame, [c for c in frame.columns if c.startswith(prefix)])
+
+
+def baseline_columns(frame: pd.DataFrame) -> dict[str, list[str]]:
+    """Column groups of the cheap tier (available for every detection except gradients)."""
+    gradient = _prefixed(frame, "grad__")
+    return {
+        "output": _numeric(frame, [c for c in frame.columns if c.startswith("out__")] + ["class_id"]),
+        "prenms": _prefixed(frame, "pre__"),
+        "tta": _prefixed(frame, "tta__"),
+        "gradient": gradient,
+        "gradient_lite": [c for c in gradient if not c.startswith("grad__rg_")],
+    }
+
+
 def feature_sets(frame: pd.DataFrame) -> dict[str, list[str]]:
-    """Nested feature sets; S2 is the baseline every explanation set must beat."""
+    """Nested feature sets; ``S2_baseline`` is the baseline every explanation set must beat."""
     methods, controls = methods_in(frame)
-    output = _numeric(frame, [c for c in frame.columns if c.startswith("out__")] + ["class_id"])
-    gradient = _numeric(frame, [c for c in frame.columns if c.startswith("grad__")])
-    vlm_box = _numeric(frame, [c for c in frame.columns if c.startswith("vlm__box_")])
-    vlm_all = _numeric(frame, [c for c in frame.columns if c.startswith("vlm__")])
-    s2 = output + gradient
+    base = baseline_columns(frame)
+    output = base["output"]
+    vlm_box = _prefixed(frame, "vlm__box_")
+    vlm_all = _prefixed(frame, "vlm__")
+    s2_lite = output + base["gradient_lite"]
+    s2 = output + base["prenms"] + base["gradient"] + base["tta"]
+    explanation = method_columns(frame, methods)
     sets: dict[str, list[str]] = {
         "S0_confidence": ["out__confidence"],
         "S1_output": output,
-        "S2_output_gradient": s2,
-        "S3_explanation": s2 + method_columns(frame, methods),
     }
+    if base["prenms"]:
+        sets["S1_metadetect"] = output + base["prenms"]
+    if base["tta"]:
+        sets["S1_tta"] = output + base["tta"]
+    sets.update(
+        {
+            "S2_output_gradient": s2_lite,
+            "S2_baseline": s2,
+            "S3_explanation": s2 + explanation,
+            "S3_lite": s2_lite + explanation,
+            "S3_no_fallback_flag": s2 + [c for c in explanation if not c.endswith("__is_fallback")],
+            "S3_curves_only": s2 + method_columns(frame, methods, metrics=CURVE_METRICS, prefixes=("cf", "cfb"), agreement=False),
+        }
+    )
+    cam = [name for name in methods if name in CAM_MAP_METHODS]
+    if cam:
+        sets["S3_map_only"] = s2 + method_columns(frame, cam, metrics=MAP_METRICS, prefixes=("mf",), agreement=True)
     placebo = [name for name in controls if not name.startswith("shuffled_")]
     if placebo:
         sets["P_controls_only"] = s2 + method_columns(frame, placebo)
@@ -122,8 +164,41 @@ def feature_sets(frame: pd.DataFrame) -> dict[str, list[str]]:
     if vlm_box:
         sets["S2_plus_vlm_box"] = s2 + vlm_box
     if vlm_all:
+        sets["S2_plus_vlm_all"] = s2 + vlm_all
         sets["S4_explanation_vlm"] = sets["S3_explanation"] + vlm_all
     return {name: sorted(set(columns)) for name, columns in sets.items() if columns}
+
+
+def comparison_pairs(sets: dict[str, list[str]]) -> list[tuple[str, str]]:
+    """Paired-bootstrap comparisons (treatment, baseline); the gate comes first."""
+    pairs = [
+        GATE,
+        SECONDARY_GATE,
+        ("S2_baseline", "S2_output_gradient"),
+        ("S1_metadetect", "S1_output"),
+        ("S1_tta", "S1_output"),
+        ("S2_output_gradient", "S1_output"),
+        ("S1_output", "S0_confidence"),
+        ("S3_map_only", "S2_baseline"),
+        ("S3_curves_only", "S2_baseline"),
+        ("S3_no_fallback_flag", "S2_baseline"),
+    ]
+    for placebo in ("P_controls_only", "P_shuffled_only"):
+        pairs += [(placebo, "S2_baseline"), ("S3_explanation", placebo)]
+    pairs += [
+        ("S2_plus_vlm_box", "S2_baseline"),
+        ("S2_plus_vlm_all", "S2_plus_vlm_box"),
+        ("S4_explanation_vlm", "S3_explanation"),
+        ("S4_explanation_vlm", "S2_plus_vlm_all"),
+        ("S4_explanation_vlm", "S2_plus_vlm_box"),
+    ]
+    seen: set[tuple[str, str]] = set()
+    kept = []
+    for pair in pairs:
+        if pair[0] in sets and pair[1] in sets and pair not in seen:
+            seen.add(pair)
+            kept.append(pair)
+    return kept
 
 
 # ----------------------------------------------------------------------------- models
@@ -303,8 +378,13 @@ def ap_rescoring(
     thresholds: tuple[float, ...] = (0.5, 0.75),
     bootstrap_samples: int = 200,
     seed: int = 0,
+    references: tuple[str, ...] = ("confidence", "S2_baseline"),
 ) -> dict[str, Any]:
-    """AP with detections re-scored by each score map (unmapped detections keep confidence)."""
+    """AP with detections re-scored by each score map (unmapped detections keep confidence).
+
+    ``ap50_delta_vs_<reference>`` holds the AP50 gain of every score map over each
+    reference, with an image-bootstrap 95% CI (APs are computed once per sample).
+    """
 
     def _rescored(subset: list[dict[str, Any]], name: str) -> list[dict[str, Any]]:
         mapping = score_maps.get(name, {})
@@ -326,22 +406,24 @@ def ap_rescoring(
             for name in names
         }
     rng = np.random.default_rng(seed)
-    deltas: dict[str, list[float]] = {name: [] for name in names if name != "confidence"}
+    references = tuple(reference for reference in references if reference in names)
+    sampled: dict[str, list[float]] = {name: [] for name in names}
     for _ in range(bootstrap_samples):
         subset = [images[i] for i in rng.integers(0, len(images), size=len(images))]
-        base = average_precision(_rescored(subset, "confidence"), iou_threshold=0.5, score_key="rescored")["ap"]
-        for name in deltas:
-            deltas[name].append(
-                average_precision(_rescored(subset, name), iou_threshold=0.5, score_key="rescored")["ap"] - base
-            )
-    results["ap50_delta_vs_confidence"] = {
-        name: {
-            "delta": results["ap50"][name] - results["ap50"]["confidence"],
-            "ci_low": float(np.percentile(values, 2.5)) if values else float("nan"),
-            "ci_high": float(np.percentile(values, 97.5)) if values else float("nan"),
-        }
-        for name, values in deltas.items()
-    }
+        for name in names:
+            sampled[name].append(average_precision(_rescored(subset, name), iou_threshold=0.5, score_key="rescored")["ap"])
+    for reference in references:
+        reference_values = np.asarray(sampled[reference])
+        results[f"ap50_delta_vs_{reference}"] = {}
+        for name in names:
+            if name == reference:
+                continue
+            values = np.asarray(sampled[name]) - reference_values
+            results[f"ap50_delta_vs_{reference}"][name] = {
+                "delta": results["ap50"][name] - results["ap50"][reference],
+                "ci_low": float(np.percentile(values, 2.5)) if values.size else float("nan"),
+                "ci_high": float(np.percentile(values, 97.5)) if values.size else float("nan"),
+            }
     return results
 
 
@@ -419,6 +501,26 @@ def _class_frequency_tercile(frame: pd.DataFrame) -> pd.Series:
     return pd.cut(ranks, bins=[0, 1 / 3, 2 / 3, 1.0], labels=["rare", "mid", "frequent"], include_lowest=True).astype(str)
 
 
+def fp_type_auroc(frame: pd.DataFrame, y: np.ndarray, predictions: dict[str, np.ndarray], names: list[str]) -> pd.DataFrame:
+    """AUROC of TP vs each FP type (background / classification / localization / duplicate)."""
+    from sklearn.metrics import roc_auc_score
+
+    is_tp = y.astype(bool)
+    fp_types = frame["fp_type"].to_numpy() if "fp_type" in frame else np.full(len(frame), None)
+    rows = []
+    for fp_type in sorted({str(value) for value in fp_types[~is_tp] if value is not None}):
+        mask = is_tp | (fp_types == fp_type)
+        n_fp = int((mask & ~is_tp).sum())
+        if n_fp < 20 or not is_tp.any():
+            continue
+        row: dict[str, Any] = {"fp_type": fp_type, "n_fp": n_fp, "n_tp": int(is_tp.sum())}
+        for name in names:
+            if name in predictions:
+                row[f"auroc_{name}"] = float(roc_auc_score(y[mask], predictions[name][mask]))
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def analyze_detector(
     frame_all: pd.DataFrame,
     ap_images: list[dict[str, Any]],
@@ -442,7 +544,7 @@ def analyze_detector(
     predictions: dict[str, np.ndarray] = {}
     metric_rows = []
     for name, columns in sets.items():
-        for kind in ("gbm", "logreg") if name in {"S0_confidence", "S2_output_gradient", "S3_explanation", "S4_explanation_vlm"} else ("gbm",):
+        for kind in ("gbm", "logreg") if name in MAIN_SETS else ("gbm",):
             p = oof_predict(frame, columns, y, fold_ids, kind, seed)
             key = name if kind == "gbm" else f"{name}[logreg]"
             predictions[key] = p
@@ -452,27 +554,24 @@ def analyze_detector(
     # Out-of-fold P(TP) per detection, for error analysis and qualitative figures.
     keep = ["image", "det_id", "bbox", "class_name", "confidence", "coco_size", "is_tp", "fp_type", "iou_gt"]
     prediction_table = frame[[column for column in keep if column in frame]].copy()
-    for name in ("S0_confidence", "S2_output_gradient", "S3_explanation", "S4_explanation_vlm"):
+    for name in MAIN_SETS:
         if name in predictions:
             prediction_table[f"p_{name}"] = predictions[name]
     prediction_table.to_csv(output_dir / f"g1_predictions_{detector}.csv", index=False)
 
-    comparisons = [("S3_explanation", "S2_output_gradient"), ("S2_output_gradient", "S1_output"), ("S1_output", "S0_confidence")]
-    for placebo in ("P_controls_only", "P_shuffled_only"):
-        if placebo in predictions:
-            comparisons += [(placebo, "S2_output_gradient"), ("S3_explanation", placebo)]
-    if "S4_explanation_vlm" in predictions:
-        comparisons.append(("S4_explanation_vlm", "S3_explanation"))
-    if "S2_plus_vlm_box" in predictions:
-        comparisons.append(("S2_plus_vlm_box", "S2_output_gradient"))
+    comparisons = comparison_pairs(sets)
     bootstrap = paired_bootstrap_auroc(y, predictions, groups, comparisons, boot, seed)
-    gate_key = "S3_explanation - S2_output_gradient"
+    threshold = float(cfg.get("gate_delta_auroc", 0.02))
+    gate_key, secondary_key = " - ".join(GATE), " - ".join(SECONDARY_GATE)
     gate = bootstrap[gate_key]
-    g1_pass = gate["delta_auroc"] >= float(cfg.get("gate_delta_auroc", 0.02)) and gate["ci_low"] > 0
+    g1_pass = gate["delta_auroc"] >= threshold and gate["ci_low"] > 0
+    secondary = bootstrap.get(secondary_key, {})
+    secondary_pass = bool(secondary) and secondary["delta_auroc"] >= threshold and secondary["ci_low"] > 0
 
-    subgroup_rows = []
     from sklearn.metrics import roc_auc_score
 
+    subgroup_names = [name for name in ("S0_confidence", "S2_output_gradient", "S2_baseline", "S3_explanation") if name in predictions]
+    subgroup_rows = []
     for column in ["coco_size", "class_freq"] + [c for c in frame.columns if c.startswith("attr__")]:
         for value, rows in frame.groupby(column).groups.items():
             rows = np.asarray(list(rows))
@@ -484,29 +583,27 @@ def analyze_detector(
                     "value": value,
                     "n": int(rows.size),
                     "tp_rate": float(y[rows].mean()),
-                    **{
-                        f"auroc_{name}": float(roc_auc_score(y[rows], predictions[name][rows]))
-                        for name in ("S0_confidence", "S2_output_gradient", "S3_explanation")
-                    },
+                    **{f"auroc_{name}": float(roc_auc_score(y[rows], predictions[name][rows])) for name in subgroup_names},
                 }
             )
     pd.DataFrame(subgroup_rows).to_csv(output_dir / f"subgroup_auroc_{detector}.csv", index=False)
+    fp_names = [name for name in ("S0_confidence", "S1_output", "S2_baseline", "S3_explanation", "S2_plus_vlm_box", "S4_explanation_vlm") if name in predictions]
+    fp_table = fp_type_auroc(frame, y, predictions, fp_names)
+    fp_table.to_csv(output_dir / f"fp_type_auroc_{detector}.csv", index=False)
 
     methods, _ = methods_in(frame)
     expensive_cost = float(
         sum(frame[f"m__{m}__explain_time"].mean() + frame[f"m__{m}__eval_time"].mean() for m in methods if f"m__{m}__explain_time" in frame)
     )
-    costs = {
-        "cheap": float(frame["grad__grad_time"].mean()) if "grad__grad_time" in frame else 0.0,
-        "expensive": expensive_cost,
-    }
+    cheap_cost = sum(float(frame[column].mean()) for column in ("grad__grad_time", "cost__prenms_s", "cost__tta_s") if column in frame)
+    costs = {"cheap": cheap_cost, "expensive": expensive_cost}
     acquisition = acquisition_curves(
         frame,
         y,
         fold_ids,
-        predictions["S2_output_gradient"],
+        predictions["S2_baseline"],
         predictions["S3_explanation"],
-        sets["S2_output_gradient"],
+        sets["S2_baseline"],
         list(cfg.get("acquisition_budgets", [0.0, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0])),
         costs,
         seed,
@@ -533,22 +630,28 @@ def analyze_detector(
         for policy in budgets_df.columns:
             g2[f"gain_retained_at_50pct[{policy}]"] = float((budgets_df.loc[0.5, policy] - base) / (full - base))
 
-    # G3: re-score all detections of this detector (explained -> full model; others -> output model).
+    # G3: re-score all detections of this detector. Unexplained detections get the
+    # cheap all-detection model (output + pre-NMS + TTA); explained ones the set's model.
     y_all = frame_all["is_tp"].to_numpy().astype(int)
     folds_all = image_folds(frame_all["image"].to_numpy(), folds, seed)
-    p_output_all = oof_predict(frame_all, sets["S1_output"], y_all, folds_all, "gbm", seed)
+    base_all = baseline_columns(frame_all)
     keys_all = list(zip(frame_all["image"], frame_all["det_id"]))
     keys_explained = list(zip(frame["image"], frame["det_id"]))
-    output_map = dict(zip(keys_all, p_output_all))
+    output_map = dict(zip(keys_all, oof_predict(frame_all, base_all["output"], y_all, folds_all, "gbm", seed)))
     score_maps = {"S1_output": output_map}
-    for name in ("S2_output_gradient", "S3_explanation", "S4_explanation_vlm"):
+    strong_columns = sorted(set(base_all["output"] + base_all["prenms"] + base_all["tta"]))
+    all_map = output_map
+    if len(strong_columns) > len(base_all["output"]):
+        all_map = dict(zip(keys_all, oof_predict(frame_all, strong_columns, y_all, folds_all, "gbm", seed)))
+        score_maps["S1_strong_all"] = all_map
+    for name in ("S2_output_gradient", "S2_baseline", "S3_explanation", "S4_explanation_vlm"):
         if name in predictions:
-            score_maps[name] = {**output_map, **dict(zip(keys_explained, predictions[name]))}
+            score_maps[name] = {**all_map, **dict(zip(keys_explained, predictions[name]))}
     detector_images = [image for image in ap_images if image["run"] == detector]
     g3 = ap_rescoring(detector_images, score_maps, seed=seed, bootstrap_samples=int(cfg.get("ap_bootstrap_samples", 200)))
 
     abstention_scores = {"confidence": frame["confidence"].to_numpy()}
-    for name in ("S2_output_gradient", "S3_explanation", "S4_explanation_vlm"):
+    for name in ("S2_output_gradient", "S2_baseline", "S3_explanation", "S4_explanation_vlm"):
         if name in predictions:
             abstention_scores[name] = predictions[name]
     subgroups = ["coco_size", "class_freq"] + [c for c in frame.columns if c.startswith("attr__")]
@@ -562,10 +665,13 @@ def analyze_detector(
         "tp_rate": float(y.mean()),
         "g1": {
             "gate": gate_key,
-            "threshold": float(cfg.get("gate_delta_auroc", 0.02)),
+            "threshold": threshold,
             "pass": bool(g1_pass),
+            "secondary_gate": secondary_key,
+            "secondary_pass": bool(secondary_pass),
             "bootstrap": bootstrap,
             "top_sets": metrics_table.head(8)[["set", "auroc", "auprc", "fpr_at_95tpr"]].to_dict(orient="records"),
+            "fp_type_auroc": fp_table.to_dict(orient="records"),
         },
         "g2": {**g2, "costs_s_per_detection": costs},
         "g3": g3,
@@ -584,14 +690,24 @@ def write_report(summary: list[dict[str, Any]], output_dir: Path) -> None:
             f"- **G1** {g1['gate']}: ΔAUROC {gate['delta_auroc']:+.4f} [95% CI {gate['ci_low']:+.4f}, {gate['ci_high']:+.4f}]"
             f" -> {'PASS' if g1['pass'] else 'FAIL'} (threshold {g1['threshold']})",
         ]
+        secondary = g1["bootstrap"].get(g1.get("secondary_gate", ""), {})
+        if secondary:
+            lines.append(
+                f"- G1 secondary {g1['secondary_gate']}: ΔAUROC {secondary['delta_auroc']:+.4f}"
+                f" [{secondary['ci_low']:+.4f}, {secondary['ci_high']:+.4f}] -> {'PASS' if g1['secondary_pass'] else 'FAIL'}"
+            )
         for key, value in g1["bootstrap"].items():
-            if key != g1["gate"]:
+            if key not in (g1["gate"], g1.get("secondary_gate")):
                 lines.append(f"  - {key}: {value['delta_auroc']:+.4f} [{value['ci_low']:+.4f}, {value['ci_high']:+.4f}]")
+        for row in g1.get("fp_type_auroc", []):
+            aurocs = ", ".join(f"{k[6:]}={v:.3f}" for k, v in row.items() if k.startswith("auroc_"))
+            lines.append(f"  - TP vs {row['fp_type']} FP (n_fp={row['n_fp']}): {aurocs}")
         lines.append("- **G2** acquisition: " + ", ".join(f"{k}={v:.3f}" if isinstance(v, float) else f"{k}={v}" for k, v in g2.items() if k != "costs_s_per_detection"))
         lines.append(f"  - cost per detection (s): {g2['costs_s_per_detection']}")
         lines.append("- **G3** AP50: " + ", ".join(f"{k}={v:.4f}" for k, v in g3["ap50"].items()))
-        for name, value in g3["ap50_delta_vs_confidence"].items():
-            lines.append(f"  - ΔAP50 {name}: {value['delta']:+.4f} [{value['ci_low']:+.4f}, {value['ci_high']:+.4f}]")
+        for reference in ("confidence", "S2_baseline"):
+            for name, value in g3.get(f"ap50_delta_vs_{reference}", {}).items():
+                lines.append(f"  - ΔAP50 {name} vs {reference}: {value['delta']:+.4f} [{value['ci_low']:+.4f}, {value['ci_high']:+.4f}]")
         lines.append("")
     (output_dir / "report.md").write_text("\n".join(lines), encoding="utf-8")
 

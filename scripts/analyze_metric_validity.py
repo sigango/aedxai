@@ -13,6 +13,9 @@ run (detector x domain x split):
 4. Conditioning: gcame - gcame_raw and gradcam - gradcam_raw on every metric.
 5. Headroom: best fixed method vs per-detection oracle under each objective.
 6. Fallback rates and real explanation/evaluation times.
+7. Fallback sensitivity: each method's composite with and without the
+   detections where its map was replaced by the bbox prior, the bbox prior's own
+   composite on those detections, and the TP rate with and without a fallback.
 
 Bootstrap CIs resample images.
 
@@ -172,6 +175,37 @@ def conditioning_deltas(frame: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def fallback_table(frame: pd.DataFrame) -> pd.DataFrame:
+    """Fallback rate per method and how much the substituted bbox-prior maps move its scores."""
+    rows = []
+    for name in _names(frame):
+        flag = f"m__{name}__is_fallback"
+        if flag not in frame:
+            continue
+        fallback = frame[flag].fillna(False).astype(bool).to_numpy()
+        row: dict[str, Any] = {
+            "method": name,
+            "is_control": _is_control(name),
+            "n": int(len(frame)),
+            "n_fallback": int(fallback.sum()),
+            "fallback_rate": float(fallback.mean()) if len(frame) else float("nan"),
+        }
+        composite = f"m__{name}__composite"
+        if composite in frame:
+            values = frame[composite].to_numpy(dtype=float)
+            row["composite_all"] = float(np.nanmean(values)) if values.size else float("nan")
+            row["composite_non_fallback"] = float(np.nanmean(values[~fallback])) if (~fallback).any() else float("nan")
+            row["composite_fallback_rows"] = float(np.nanmean(values[fallback])) if fallback.any() else float("nan")
+        if fallback.any() and "m__bbox_prior__composite" in frame:
+            row["bbox_prior_composite_fallback_rows"] = float(frame.loc[fallback, "m__bbox_prior__composite"].mean())
+        if "is_tp" in frame:
+            is_tp = frame["is_tp"].to_numpy(dtype=bool)
+            row["tp_rate_fallback"] = float(is_tp[fallback].mean()) if fallback.any() else float("nan")
+            row["tp_rate_non_fallback"] = float(is_tp[~fallback].mean()) if (~fallback).any() else float("nan")
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def headroom_table(frame: pd.DataFrame) -> pd.DataFrame:
     real = [name for name in _names(frame) if not _is_control(name)]
     rows = []
@@ -226,12 +260,14 @@ def main() -> None:
         conditioning = conditioning_deltas(part)
         headroom = headroom_table(part)
         agreement = pseudo_gt_agreement(part)
+        fallbacks = fallback_table(part)
         for name, table in (
             ("methods", methods),
             ("by_size", sizes),
             ("size_trend", trend),
             ("conditioning", conditioning),
             ("headroom", headroom),
+            ("fallback", fallbacks),
         ):
             table.to_csv(output_dir / f"{name}_{run}.csv", index=False)
 
@@ -249,6 +285,7 @@ def main() -> None:
             "pseudo_gt_agreement": agreement,
             "headroom": headroom.to_dict(orient="records"),
             "size_trend": trend.to_dict(orient="records"),
+            "fallback": fallbacks[fallbacks["n_fallback"] > 0].to_dict(orient="records") if not fallbacks.empty else [],
         }
         report += [
             f"## {run} ({len(part)} explained detections)",
@@ -265,6 +302,9 @@ def main() -> None:
             "",
             "### Headroom per objective",
             _markdown(headroom.round(4)) if not headroom.empty else "(not enough methods)",
+            "",
+            "### Fallback to the bbox prior (methods with at least one fallback)",
+            _markdown(fallbacks[fallbacks["n_fallback"] > 0].round(4)) if not fallbacks.empty and (fallbacks["n_fallback"] > 0).any() else "(no fallbacks)",
             "",
             "### Conditioning deltas",
             _markdown(conditioning.round(4)) if not conditioning.empty else "(raw variants not run)",

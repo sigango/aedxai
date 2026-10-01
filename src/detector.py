@@ -475,6 +475,75 @@ class DetectorWrapper:
             for image in images
         ]
 
+    def detect_candidates(
+        self,
+        image: np.ndarray,
+        conf_thresh: float = 0.01,
+        max_candidates: int = 3000,
+    ) -> list[tuple[list[float], int, float]]:
+        """Every candidate box before non-maximum suppression (MetaDetect input).
+
+        Returns ``(box_xyxy, coco80_class_id, score)`` tuples in original-image
+        coordinates, highest score first. YOLOX: the official postprocess with
+        the NMS IoU threshold set to 1.0 (nothing is suppressed). Faster R-CNN:
+        the ROI-head NMS is disabled for this one forward pass, so the per-class
+        candidates of every proposal above ``conf_thresh`` are returned.
+        """
+        self.load_model()
+        assert self.model is not None
+        torch = _require_torch()
+        image = self._validate_image(image)
+
+        if self.model_name == "yolox-s":
+            processed_image, scale = self._preprocess_yolox(image)
+            tensor = torch.from_numpy(np.ascontiguousarray(processed_image)).float()
+            if tensor.ndim == 3:
+                tensor = tensor.unsqueeze(0)
+            with torch.inference_mode():
+                raw_outputs = self.model(tensor.to(self.device))
+                predictions = self._postprocess_yolox_outputs(raw_outputs, conf_thresh=conf_thresh, nms_thresh=1.0)
+            if predictions.numel() == 0:
+                return []
+            scores = (predictions[:, 4] * predictions[:, 5]).detach().cpu().numpy()
+            boxes = (predictions[:, :4] / scale).detach().cpu().numpy()
+            class_ids = predictions[:, 6].to(dtype=torch.int64).detach().cpu().numpy()
+            candidates = [
+                (boxes[index].tolist(), int(class_ids[index]), float(scores[index]))
+                for index in range(len(scores))
+                if scores[index] >= conf_thresh and 0 <= int(class_ids[index]) < len(COCO_CLASSES)
+            ]
+        else:
+            roi_heads = self.model.roi_heads
+            saved = (roi_heads.score_thresh, roi_heads.nms_thresh, roi_heads.detections_per_img)
+            roi_heads.score_thresh, roi_heads.nms_thresh, roi_heads.detections_per_img = (
+                float(conf_thresh),
+                1.0,
+                int(max_candidates),
+            )
+            try:
+                tensor = torch.from_numpy(np.ascontiguousarray(image)).permute(2, 0, 1).float() / 255.0
+                with torch.inference_mode():
+                    output = self.model([tensor.to(self.device)])[0]
+            finally:
+                roi_heads.score_thresh, roi_heads.nms_thresh, roi_heads.detections_per_img = saved
+            boxes = output["boxes"].detach().cpu().numpy()
+            scores = output["scores"].detach().cpu().numpy()
+            labels = output["labels"].detach().cpu().tolist()
+            candidates = []
+            for index, label in enumerate(labels):
+                mapped = COCO_91_TO_80.get(int(label))
+                if mapped is not None and scores[index] >= conf_thresh:
+                    candidates.append((boxes[index].tolist(), int(mapped), float(scores[index])))
+
+        # Clip to the image like the final detections (YOLOX boxes can reach into the letterbox padding).
+        height, width = image.shape[:2]
+        candidates = [
+            ([min(max(box[0], 0.0), width), min(max(box[1], 0.0), height), min(max(box[2], 0.0), width), min(max(box[3], 0.0), height)], class_id, score)
+            for box, class_id, score in candidates
+        ]
+        candidates.sort(key=lambda item: item[2], reverse=True)
+        return candidates[: int(max_candidates)]
+
     def get_model(self) -> Any:
         """Return the underlying PyTorch detector model."""
         self.load_model()
@@ -729,13 +798,15 @@ class DetectorWrapper:
         tensor = tensor.to(self.device)
 
         assert self.model is not None
+        # Postprocess inside inference mode: the official YOLOX postprocess edits
+        # its input in place, which is not allowed on inference tensors outside it.
         with torch.inference_mode():
             raw_outputs = self.model(tensor)
-        predictions = self._postprocess_yolox_outputs(
-            raw_outputs=raw_outputs,
-            conf_thresh=conf_thresh,
-            nms_thresh=nms_thresh,
-        )
+            predictions = self._postprocess_yolox_outputs(
+                raw_outputs=raw_outputs,
+                conf_thresh=conf_thresh,
+                nms_thresh=nms_thresh,
+            )
 
         if predictions.numel() == 0:
             return []

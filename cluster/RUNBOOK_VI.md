@@ -2,7 +2,7 @@
 
 Tài liệu này là bản hướng dẫn thực hành cho Part B của `RESULTS_AND_PLAN.md`. Mọi lệnh đều đi qua `cluster/submit.sh` và `cluster/task.sh`, nên chạy từ notebook 07 hay từ terminal đều ra cùng một lệnh.
 
-Các con số GPU-h bên dưới là **ước tính** lấy từ B5. Bước smoke (mục 3) sẽ đo số thật; khi có, hãy ghi đè bảng ở mục 0.
+Các con số GPU-h ở mục 0 lấy từ **số đo thật** trên một DGX Spark (GB10) ở bước smoke ngày 2026-10-01 (mục B5 của `RESULTS_AND_PLAN.md`). Riêng BDD và legacy vẫn là ngoại suy. Kế hoạch đang dùng là **phương án B**: chạy đầy đủ trên COCO cho cả hai detector, chỉ cắt bớt phần chuyển miền (BDD) và các hàng v1 của Faster R-CNN.
 
 ---
 
@@ -14,17 +14,18 @@ Các con số GPU-h bên dưới là **ước tính** lấy từ B5. Bước smo
       ──> [7] test COCO ──> [8] BDD100K ──> [9] legacy v1 + cascade ──> [10] phân tích (CPU)
 ```
 
-| Stage | Lệnh | GPU-h (ước tính) | Shards mặc định | Giờ mỗi shard (ước tính) | Quyết định sau stage |
-|---|---|---:|---:|---:|---|
-| smoke | `smoke vlm-smoke` | < 1 | 1 | < 0.5 | Go/no-go; đo s/detection |
-| pilot | `pilot vlm-pilot analyze-pilot` | YOLOX 1–3; FRCNN 20–40; VLM ~1 | 4 | FRCNN 5–10 | **D1** |
-| calib | `calib calibrate-tau` | ~15 | 8 | ~2 | τ theo từng detector |
-| test | `test vlm-test analyze-test` | YOLOX 5–13; FRCNN 80–155; VLM ~5 | 16 | FRCNN 5–10 | G1–G3 và B (khẳng định) |
-| bdd | `bdd vlm-bdd analyze-bdd` | chưa có trong B5; FRCNN có thể ngang test | 8 → **nên đặt 16** | FRCNN 10–19 nếu để 8 shard | X (chuyển miền) |
-| legacy | `selector legacy`, sau đó `cascade` | 60–120 | **1 job/tác vụ, không shard, không resume** | FRCNN LIME có thể > 24 | Chỉ để có hàng so sánh v1 |
+| Stage | Lệnh | YOLOX (GPU-h) | FRCNN (GPU-h) | Quyết định sau stage |
+|---|---|---:|---:|---|
+| smoke | `smoke vlm-smoke` | < 1 | < 1 | Go/no-go; đo s/detection |
+| pilot | `pilot vlm-pilot analyze-pilot` | 8 | 36 | **D1** |
+| calib | `calib calibrate-tau` | 1 | 8 | τ theo từng detector |
+| test | `test vlm-test analyze-test` | 38 | 143 | G1–G3 và B (khẳng định) |
+| bdd | `bdd vlm-bdd analyze-bdd` | 33 | 71 (300 ảnh) | X (chuyển miền) |
+| legacy | `selector legacy`, sau đó `cascade` | 31 | 21 | Chỉ để có hàng so sánh v1 |
 
-- **Tổng:** khoảng 190–350 GPU-h chưa kể BDD, khoảng 280–520 GPU-h nếu tính cả BDD.
-- **Thời gian thực** ≈ GPU-h ÷ số GPU chạy song song. Ví dụ với 8 GPU đồng thời, toàn bộ mất khoảng 1.5–3 ngày chạy máy, chưa tính thời gian chờ hàng đợi.
+- **Tổng phương án B:** khoảng 400 GPU-h, cộng khoảng 10 giờ cho VLM. Trên một GB10 là khoảng **17 ngày chạy liên tục**.
+- **Một tiến trình mỗi GPU (`PROCS_PER_GPU=1`).** Khi hai tiến trình Faster R-CNN chạy chung một GB10, mỗi tiến trình chậm đi khoảng 2,1 lần, nên tổng tốc độ không tăng.
+- Baseline mạnh (pre-NMS và TTA) tốn thêm 5 lượt forward mỗi ảnh, không đáng kể so với explainer.
 - Faster R-CNN là phần tốn nhất: pilot, test, BDD và các baseline LIME / D-CLOSE của legacy.
 
 ---
@@ -100,9 +101,10 @@ cp cluster/cluster.env.example cluster/cluster.env
 | `RUN_PREFIX` | Cách A: `"apptainer exec --nv --bind ${PWD} $HOME/containers/pytorch_25.11.sif"`. Cách B: `""` |
 | `BACKEND` | `slurm`, hoặc `local` trên workstation / DGX Spark |
 | `SLURM_PARTITION`, `SLURM_ACCOUNT`, `SLURM_TIME`, `SLURM_MEM`, `SLURM_GRES` | Theo cluster. `SLURM_MEM=48G` là đủ; VLM fp16 cần GPU ≥ 24 GB |
-| `NUM_IMAGES_dev_frcnn=150`, `NUM_IMAGES_test_frcnn=1000` | Giữ như kế hoạch. Lưu ý BDD cũng là split `test`, nên dùng chung giới hạn `NUM_IMAGES_test_frcnn` |
+| `NUM_IMAGES_dev_frcnn=150`, `NUM_IMAGES_test_frcnn=1000`, `NUM_IMAGES_bdd_frcnn=300` | Giữ như kế hoạch. BDD có giới hạn riêng `NUM_IMAGES_bdd_<det>` (phương án B: 300 ảnh cho FRCNN) |
+| `LEGACY_METHODS_<det>`, `LEGACY_VARIANTS_<det>`, `CASCADE_DETECTORS` | Phương án B: YOLOX chạy mọi hàng v1; FRCNN chỉ chạy `gradcam gcame` và `v1`; cascade chỉ cho `yolox`. Bỏ trống (unset) một biến để chạy đủ mọi hàng cho detector đó |
 | `SHARDS_XDOMAIN` | **16** (mặc định 8 dễ vượt 24 h/shard với FRCNN trên BDD) |
-| `LOCAL_GPUS`, `PROCS_PER_GPU` | Chỉ dùng khi `BACKEND=local`. GPU 24 GB: evidence có thể chạy 2 tiến trình, **VLM chỉ 1**. DGX Spark: 2–3 |
+| `LOCAL_GPUS`, `PROCS_PER_GPU` | Chỉ dùng khi `BACKEND=local`. **`PROCS_PER_GPU=1`**: trên GB10 hai tiến trình không nhanh hơn một (đã đo) |
 
 Thêm hai dòng sau vào cuối `cluster.env` để node tính toán không cố truy cập internet:
 

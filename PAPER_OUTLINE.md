@@ -88,6 +88,14 @@ Xác suất là **Ước tính** cho run test đã đóng băng, với baseline 
 
 ## 5. Việc cần làm trước khi chạy test (stage 3)
 
+> **Trạng thái (2026-10-01):**
+> - Đã làm:
+>   - 5.1 mục 1–3 (so sánh VLM, `S3_map_only` / `S3_curves_only`, AUROC theo loại FP);
+>   - 5.2 mục 6–9 (TTA, pre-NMS, gradient kiểu Riedlinger; gate chính so với `S2_baseline`);
+>   - phân tích fallback (`S3_no_fallback_flag`, `fallback_*.csv`).
+> - Chưa làm: 5.1 mục 4 (hồi quy IoU) và mục 5 (S3-compact); 5.3.
+> - Kế hoạch chạy: phương án B (khoảng 400 GPU-h trên GB10).
+
 Các mục dưới đây phải đóng băng *trước* test split, vì gate và feature set được cố định từ lúc đó. Xếp theo tỉ lệ giá trị trên chi phí.
 
 ### 5.1 Chỉ sửa phần phân tích (CPU, khoảng nửa ngày)

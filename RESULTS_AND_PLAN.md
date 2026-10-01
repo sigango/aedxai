@@ -110,7 +110,7 @@ No work was found that uses perturbation faithfulness, cross-explainer disagreem
 | Gate | Question | Pass rule (fixed before the test run) | Produced by |
 |---|---|---|---|
 | **B** | Does the annotation-free composite rank explanations, or box geometry? | Report only. The bbox prior scores ≥ some real methods, and the OA size trend shrinks under the box-relative protocol. | `analyze_metric_validity.py` |
-| **G1** | Does explanation evidence predict TP vs FP beyond output + gradient? | ΔAUROC(S3 − S2) ≥ 0.02 with paired image-bootstrap CI low > 0, on test, for both detectors. The placebo (`P_controls_only`) must not explain the gain. | `analyze_evidence.py` |
+| **G1** | Does explanation evidence predict TP vs FP beyond output, gradient and augmentation uncertainty? | ΔAUROC(`S3_explanation` − `S2_baseline`) ≥ 0.02 with paired image-bootstrap CI low > 0, on test, for both detectors. `S2_baseline` = post-NMS output + pre-NMS candidates (MetaDetect) + gradients (incl. Riedlinger-style head gradients) + TTA. The placebo (`P_controls_only`) must not explain the gain. Secondary (the original lite gate): `S3_lite` − `S2_output_gradient`. | `analyze_evidence.py` |
 | **G2** | Does budget-aware acquisition beat uniform/random at equal compute? | `learned_voi` keeps ≥ 70% of the full-evidence AUROC gain at a 50% budget and beats `random` | `g2_acquisition_*.csv` |
 | **G3** | Does re-scoring improve detection? | ΔAP50 vs confidence > 0 with CI low > 0 | `report.md` (G3) |
 | **X** | Does it transfer? | G1 passes on BDD100K; day/night and weather subgroup coverage reported | `bdd` stage |
@@ -129,8 +129,9 @@ The paper-facing metric is unchanged: `composite_weights`, `evaluate_all()` and 
 | Speed | LIME/D-CLOSE forwards batched with `batch_size`; maps equal to batch-1 within 1e-5 (tested) | `src/xai_methods/{lime_det,dclose,base}.py` |
 | Controls | `gcame_raw` and `gradcam_raw` (bbox conditioning removed), `bbox_prior`, `center_prior`, `random`, pixel-shuffled maps | `src/xai_methods/{__init__,controls}.py` |
 | Evidence | COCO-style GT matching with FP type, AP, output/gradient/map/curve/agreement features, VLM P(yes) | `src/gt_matching.py`, `src/evidence.py`, `src/vlm_judge.py` |
+| Strong baselines | Pre-NMS candidate statistics (`DetectorWrapper.detect_candidates`, `pre__*`), TTA stability over hflip/shrink/shift/dark (`tta__*`), Riedlinger-style self-learning-loss gradient norms per head parameter group (`grad__rg_*`; classification term only, the box term is zero for the post-NMS box). Computed for every detection except the gradients. | `src/detector.py`, `src/evidence.py`, `scripts/run_evidence.py`, `config/evidence_config*.yaml` |
 | Runners | `run_evidence.py` (sharded, resumable), `run_vlm_verification.py` (separate pass, so the VLM never shares memory with the explainers) | `scripts/` |
-| Analysis (CPU) | `analyze_evidence.py` (G1–G3, conformal abstention, subgroups), `analyze_metric_validity.py` (B + headroom), `calibrate_tau.py` | `scripts/` |
+| Analysis (CPU) | `analyze_evidence.py` (G1–G3, conformal abstention, subgroups, AUROC per FP type, `S3_map_only` / `S3_curves_only` / `S3_no_fallback_flag`, VLM box vs salient-pixel comparisons), `analyze_metric_validity.py` (B + headroom + fallback sensitivity), `calibrate_tau.py` | `scripts/` |
 | Cluster | `cluster/{task.sh,submit.sh,env_check.sh,cluster.env.example}` | `cluster/` |
 
 Local validation: `python -m compileall -q src scripts tests` passes. `pytest -m "not slow" tests` gives 76 passed and 5 skipped; the skips are pre-existing (no `torchvision`/`captum` locally, plus one GPU-only timing test). **Check these first on the cluster**, since they could not be run locally:
@@ -174,31 +175,38 @@ Stages given in one `submit.sh` call are chained with `afterok`. A pre-empted sh
 | 1 | `cluster/submit.sh pilot vlm-pilot analyze-pilot` | COCO dev, full config (6 methods + 3 controls + 2 shuffled). YOLOX on 300 images, FRCNN on 150. | **D1:** G1 direction (not confirmatory). Measure `image_time` and fix the test budget (B5). Choose the lite method list from `g2_method_value_*.csv` and edit `config/evidence_config_lite.yaml`. Decide D-CLOSE 200 vs 2000 masks. |
 | 2 | `cluster/submit.sh calib calibrate-tau` | COCO calib, G-CAME only; per-detector τ = p30 | Paste `tau_by_detector` into `config/eval_config.yaml` and commit it. This replaces the provisional values, which overlap the old test images. |
 | 3 | `cluster/submit.sh test vlm-test analyze-test` | COCO test, lite config. YOLOX on 2000 images, FRCNN on 1000. | **G1/G2/G3 and B final** (confirmatory) |
-| 4 | `cluster/submit.sh bdd vlm-bdd analyze-bdd` | BDD100K test, lite config | **X**, with day/night and weather subgroups |
-| 5 | `cluster/submit.sh selector legacy`, then `cluster/submit.sh cascade` | v1 comparison rows on 1000 test images: 4 baselines × 2 detectors (incl. FRCNN LIME), relabelled selector `v1` (feedback/VLM off) and `v1orig`, then the G-CAME→LIME cascade with the calibrated τ | Comparison rows only |
+| 4 | `cluster/submit.sh bdd vlm-bdd analyze-bdd` | BDD100K test, lite config. Plan B: FRCNN on the first 300 images (`NUM_IMAGES_bdd_frcnn`) | **X**, with day/night and weather subgroups |
+| 5 | `cluster/submit.sh selector legacy`, then `cluster/submit.sh cascade` | v1 comparison rows on 1000 test images. Plan B (`LEGACY_*`, `CASCADE_DETECTORS` in `cluster.env`): YOLOX gets the 4 baselines, `v1`, `v1orig` and the G-CAME→LIME cascade; FRCNN gets only the GradCAM and G-CAME baselines and `v1` | Comparison rows only |
 
 ## B5. Compute budget
 
-These are estimates from forward counts plus v1 timings, **not measurements**; stage 1 measures the real figures. Basis:
-- The full config costs ≈1,200 detector forwards per explained detection: 11 maps × 44 evaluator forwards, plus LIME 500, plus D-CLOSE 200. The lite config costs ≈970.
-- The v1 Faster R-CNN evaluator ran at ≈12 forwards/s unbatched.
+**Measured** on one DGX Spark (GB10) in the notebook 06 smoke run (3 dev images per detector, full config, one process on the GPU; 2026-10-01):
 
-| Stage | Detections (est.) | s/detection (est.) | GPU-h (est.) |
-|---|---:|---:|---:|
-| Pilot YOLOX (300 images) | ~1,800 | 2–5 | 1–3 |
-| Pilot FRCNN (150 images) | ~2,000 | 35–70 | 20–40 |
-| Calib, both detectors (G-CAME only) | ~19k | 0.5 / 4 | ~15 |
-| Test YOLOX (2000 images) | ~12k | 1.6–4 | 5–13 |
-| Test FRCNN (1000 images, ≤10 detections/image) | ~10k | 28–56 | 80–155 |
-| VLM passes (3 queries/detection) | ~22k | ~1 | ~6 |
-| Legacy rows (1000 images) | — | — | 60–120 |
+| Detector | s / explained detection (full) | (lite) | LIME | D-CLOSE | each other map (evaluator only) |
+|---|---:|---:|---:|---:|---:|
+| YOLOX-S | 13.8 | 11.3 | 6.1 | 3.1 | 0.4–0.6 |
+| Faster R-CNN | 84.8 | 68.7 | 38.0 | 17.3 | 3.0–3.7 |
 
-GPU-h = images × explained-per-image × measured s/detection / 3600. If Faster R-CNN does not fit the budget, reduce in this order:
+Two processes on one GB10 halve the speed of each, so keep `PROCS_PER_GPU=1`. The pre-NMS and TTA baselines add 5 forwards per image (cheap). Projection for plan B (BDD and legacy are extrapolated, not measured):
+
+| Stage | YOLOX (GPU-h) | FRCNN (GPU-h) |
+|---|---:|---:|
+| Pilot (dev, full; 300 / 150 images) | 8 | 36 |
+| Calib (G-CAME only, 1000 images) | 1 | 8 |
+| Test (lite, ≤10 explained/image; 2000 / 1000 images) | 38 | 143 |
+| BDD100K (lite; 1000 / 300 images) | 33 | 71 |
+| Legacy (plan B rows) | 31 | 21 |
+| VLM passes (all) | ~10 (both) | |
+| **Total** | **~400 GPU-h ≈ 17 days on one GB10** | |
+
+The full plan (every legacy row, FRCNN on all 1000 BDD images) was ≈800 GPU-h. GPU-h = images × explained-per-image × measured s/detection / 3600. If FRCNN still does not fit, reduce in this order:
 1. `MAX_EXPLAINED=5`.
 2. `NUM_IMAGES_test_frcnn=500`.
 3. Drop D-CLOSE for FRCNN only.
 
 Keep YOLOX at full size, since it carries the headline.
+
+**Smoke-run finding for gate B:** G-CAME fell back to the bbox prior on 22.6% of the Faster R-CNN detections (`gcame_raw` 0%, LIME 3.2%, YOLOX 0% for every method). The CAM at `layer4` has no positive mass near the box centre for those detections, so the Gaussian weighting zeroes the map. The v1 Faster R-CNN G-CAME composite (0.7307) may therefore partly be a bbox-prior score. `analyze_metric_validity.py` reports `fallback_*.csv`, and `S3_no_fallback_flag` checks that G1 does not rest on the flag.
 
 ## B6. Outputs → paper
 
@@ -223,7 +231,7 @@ Keep YOLOX at full size, since it carries the headline.
 
 Risks:
 - **Circularity is reduced, not removed.** Labels come from GT, but the features come from the same detector. The placebo and single-method rows show *which* evidence carries the signal.
-- **The gradient baseline is "lite".** It uses score-gradient norms at one backbone layer, not the full Riedlinger feature set. State this, or add their features.
+- **The gradient baseline is Riedlinger-style, not their full feature set.** `grad__rg_*` are norms of the self-learning classification loss gradient per head parameter group; the box-regression term is omitted (zero for the post-NMS box). State this in the paper.
 - **The legacy selector still uses row-level splits.** It is a comparison row only; the relabelled oracle is 95% G-CAME, so expect a constant selector.
 - **VLM token ids.** On the first shard, check that `vlm__box_answer_mass` ≈ 1. A low value means the Yes/No token ids are wrong for the tokenizer.
 - **OOM:** lower `lime.batch_size` / `dclose.batch_size` (32 → 8 for FRCNN) and `evidence.evaluator_batch_size` (11 → 4). Values do not change, only speed.

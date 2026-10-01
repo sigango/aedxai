@@ -76,6 +76,16 @@ class ToyDetectorWrapper:
             make_detection([0, 48, 14, 63], class_id=2, confidence=0.4, detection_id=1),
         ]
 
+    def detect_candidates(self, image: np.ndarray, conf_thresh: float = 0.01, max_candidates: int = 3000):
+        del image, conf_thresh
+        candidates = [
+            ([16.0, 16.0, 48.0, 48.0], 0, 0.9),
+            ([17.0, 15.0, 49.0, 47.0], 0, 0.7),
+            ([16.0, 17.0, 47.0, 48.0], 2, 0.2),
+            ([0.0, 48.0, 14.0, 63.0], 2, 0.4),
+        ]
+        return candidates[:max_candidates]
+
     def get_model(self):
         return self.model
 

@@ -4,11 +4,14 @@ For every image in a manifest this script:
 
 1. runs the detector once at fixed thresholds (no feedback loop, no VLM);
 2. matches detections to COCO-format ground truth (TP / FP / FP type);
-3. for the top-``max_explained_per_image`` detections, runs every configured
+3. computes the cheap baseline features for every detection: post-NMS output
+   statistics, pre-NMS candidate statistics (one extra forward with NMS off) and
+   test-time-augmentation stability (one forward per TTA view);
+4. for the top-``max_explained_per_image`` detections, runs every configured
    explainer and control, scores each map with ``AutoEvaluator.evaluate_evidence``
    (paper-facing metrics + curves + box-relative protocol + GT-box localization),
-   and computes output, gradient, map and agreement features;
-4. appends one JSON line per image to ``<run_dir>/records/shard_XXX.jsonl``.
+   and computes gradient, map and agreement features;
+5. appends one JSON line per image to ``<run_dir>/records/shard_XXX.jsonl``.
 
 It is sharded (``--num-shards/--shard-index``) and resumable: images already in
 a shard file are skipped, so a pre-empted cluster job can simply be resubmitted.
@@ -44,7 +47,16 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.detector import DetectorWrapper
 from src.evaluator import AutoEvaluator
-from src.evidence import agreement_features, gradient_features, map_features, output_features
+from src.evidence import (
+    agreement_features,
+    candidate_arrays,
+    gradient_features,
+    map_features,
+    output_features,
+    prenms_features,
+    run_tta,
+    tta_features,
+)
 from src.gt_matching import AnnotationIndex, match_detections
 from src.provenance import resolve_image_paths, write_manifest
 from src.utils import load_image, set_seed, setup_logging
@@ -166,6 +178,30 @@ def process_image(
     detect_time = time.time() - t_detect
     model = detector.get_model()
 
+    prenms_cfg = dict(settings.get("prenms") or {})
+    candidates = None
+    t_prenms = time.time()
+    if prenms_cfg.get("enabled") and hasattr(detector, "detect_candidates"):
+        candidates = candidate_arrays(
+            detector.detect_candidates(
+                image,
+                conf_thresh=float(prenms_cfg.get("conf_thresh", 0.01)),
+                max_candidates=int(prenms_cfg.get("max_candidates", 3000)),
+            )
+        )
+    prenms_time = time.time() - t_prenms
+    tta_cfg = dict(settings.get("tta") or {})
+    tta_outputs = None
+    t_tta = time.time()
+    if tta_cfg.get("enabled"):
+        tta_outputs = run_tta(
+            detector,
+            image,
+            views=list(tta_cfg.get("views", ["hflip", "shrink", "shift", "dark"])),
+            conf_thresh=float(tta_cfg.get("conf_thresh", 0.05)),
+        )
+    tta_time = time.time() - t_tta
+
     matches = match_detections(
         boxes=[det.bbox for det in detections],
         class_ids=[det.class_id for det in detections],
@@ -203,6 +239,10 @@ def process_image(
             },
             "output": output_features(detection, detections, image),
         }
+        if candidates is not None:
+            record["prenms"] = prenms_features(detection, *candidates)
+        if tta_outputs is not None:
+            record["tta"] = tta_features(detection, tta_outputs)
         if not record["explained"]:
             detection_records.append(record)
             continue
@@ -280,6 +320,8 @@ def process_image(
         ],
         "detector": detector.model_name,
         "detect_time": float(detect_time),
+        "prenms_time": float(prenms_time),
+        "tta_time": float(tta_time),
         "image_time": float(time.time() - t_image),
         "detections": detection_records,
     }
@@ -353,6 +395,8 @@ def main() -> None:
         "agreement_pairs": [tuple(pair) for pair in evidence_cfg.get("agreement_pairs", [])],
         "save_maps_for": [] if args.no_maps else list(evidence_cfg.get("save_maps_for", [])),
         "map_downsample": int(evidence_cfg.get("map_downsample", 2)),
+        "prenms": dict(evidence_cfg.get("prenms") or {"enabled": False}),
+        "tta": dict(evidence_cfg.get("tta") or {"enabled": False}),
     }
     dclose_final = bool(args.dclose_final_masks or evidence_cfg.get("dclose_final_masks", False))
 

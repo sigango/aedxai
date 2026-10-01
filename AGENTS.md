@@ -629,7 +629,8 @@ feedback.escalation.tau_by_detector:     # provisional until calibrate_tau.py on
 ### `config/evidence_config.yaml` / `evidence_config_lite.yaml`
 
 Top-level keys `evidence` (methods, controls, shuffled maps, agreement pairs,
-gradient features, `max_explained_per_image`, saved maps), `vlm_verification`
+gradient features, `prenms` and `tta` strong baselines, `max_explained_per_image`,
+saved maps), `vlm_verification`
 and `analysis` (CV folds, bootstrap, gate `gate_delta_auroc: 0.02`, conformal
 `crc_alpha`, acquisition budgets). Freeze the lite config and gate thresholds
 before the test split is run.
@@ -772,7 +773,12 @@ python scripts/analyze_metric_validity.py --run-dirs results/evidence/coco_dev_y
 ```
 
 Evidence features never use GT-derived columns (`*_gt`, `iou_gt`, labels); GT
-is only the TP/FP endpoint. `run_experiments.py` and `run_baseline.py` accept
+is only the TP/FP endpoint. The G1 gate is `S3_explanation - S2_baseline`, where
+`S2_baseline` = post-NMS output (`out__`) + pre-NMS candidates
+(`DetectorWrapper.detect_candidates`, `pre__`) + gradients incl. Riedlinger-style
+head-group norms (`grad__`, `grad__rg_*`) + TTA stability (`tta__`); the original
+lite gate `S3_lite - S2_output_gradient` is secondary. `cost__*` columns are
+costs, never features. `run_experiments.py` and `run_baseline.py` accept
 `--image-list/--split` and write `manifest.json`; `run_experiments.py` also
 writes `detections.csv` (chosen method, escalation outcome, fallback flag).
 

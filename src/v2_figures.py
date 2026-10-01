@@ -45,8 +45,16 @@ SEQUENTIAL_BLUE = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f
 SET_LABELS = {
     "S0_confidence": "confidence only",
     "S1_output": "output features",
-    "S2_output_gradient": "output + gradient",
+    "S1_metadetect": "output + pre-NMS candidates",
+    "S1_tta": "output + TTA",
+    "S2_output_gradient": "output + gradient (lite)",
+    "S2_baseline": "strong baseline (output, pre-NMS, gradient, TTA)",
     "S3_explanation": "+ explanation evidence",
+    "S3_lite": "lite baseline + explanation evidence",
+    "S3_map_only": "+ CAM map structure only",
+    "S3_curves_only": "+ perturbation curves only",
+    "S3_no_fallback_flag": "+ explanation evidence (no fallback flag)",
+    "S2_plus_vlm_all": "+ VLM box and salient-pixel checks",
     "S4_explanation_vlm": "+ explanation + VLM",
     "P_controls_only": "+ control maps only (placebo)",
     "P_shuffled_only": "+ shuffled maps only (placebo)",
@@ -310,7 +318,8 @@ def fig_subgroup_auroc(subgroup_csv: str | Path, column: str, title: str | None 
     table = table[table["column"] == column]
     natural = {"small": 0, "medium": 1, "large": 2, "rare": 0, "mid": 1, "frequent": 2}
     table = table.assign(_order=table["value"].astype(str).map(natural).fillna(99)).sort_values(["_order", "value"])
-    series = [("auroc_S0_confidence", "confidence only"), ("auroc_S2_output_gradient", "output + gradient"), ("auroc_S3_explanation", "+ explanation evidence")]
+    baseline = ("auroc_S2_baseline", "strong baseline") if "auroc_S2_baseline" in table else ("auroc_S2_output_gradient", "output + gradient")
+    series = [("auroc_S0_confidence", "confidence only"), baseline, ("auroc_S3_explanation", "+ explanation evidence")]
     values = list(table["value"].astype(str))
     fig, ax = plt.subplots(figsize=(max(4.0, 1.3 * len(values) + 1.5), 3.0))
     width = 0.26
