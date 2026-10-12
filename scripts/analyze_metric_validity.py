@@ -16,6 +16,8 @@ run (detector x domain x split):
 7. Fallback sensitivity: each method's composite with and without the
    detections where its map was replaced by the bbox prior, the bbox prior's own
    composite on those detections, and the TP rate with and without a fallback.
+8. Pre-registered audit claims (``analysis.audit_claims`` in ``--evidence-config``,
+   PREREGISTRATION.md): bbox prior vs every real method, gcame_raw vs gradcam_raw.
 
 Bootstrap CIs resample images.
 
@@ -36,6 +38,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -206,6 +209,65 @@ def fallback_table(frame: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def audit_claims(
+    frame: pd.DataFrame, claims: dict[str, dict[str, Any]], samples: int, rng: np.random.Generator
+) -> pd.DataFrame:
+    """Pre-registered audit claims (``analysis.audit_claims``): image-bootstrap CIs of
+    per-detection metric differences.
+
+    ``noninferior``: ``reference`` (a control) is not worse than any real method by
+    more than ``margin`` (CI low of reference - method > -margin, for every method);
+    ``superior`` marks the rows where the CI low is above 0. ``equivalent``: the CI of
+    ``pair[0] - pair[1]`` lies inside [-margin, margin]. ``delta_non_fallback`` repeats
+    the point estimate without the detections where the method fell back to the bbox prior.
+    """
+    groups = frame["image"].to_numpy()
+    real = [name for name in _names(frame) if not _is_control(name)]
+    rows = []
+    for name, claim in claims.items():
+        metric, rule, margin = str(claim["metric"]), str(claim["rule"]), float(claim["margin"])
+        if rule == "noninferior":
+            pairs = [(str(claim["reference"]), method) for method in real]
+        elif rule == "equivalent":
+            pairs = [(str(claim["pair"][0]), str(claim["pair"][1]))]
+        else:
+            raise ValueError(f"Audit claim {name}: unknown rule {rule!r} (use 'noninferior' or 'equivalent').")
+        for first, second in pairs:
+            row: dict[str, Any] = {"claim": name, "metric": metric, "rule": rule, "margin": margin, "comparison": f"{first} - {second}"}
+            columns = (f"m__{first}__{metric}", f"m__{second}__{metric}")
+            if not all(column in frame for column in columns):
+                rows.append({**row, "holds": None})
+                continue
+            diff = (frame[columns[0]] - frame[columns[1]]).to_numpy(dtype=float)
+            low, high = _bootstrap_mean(diff, groups, samples, rng)
+            row.update(delta=float(np.nanmean(diff)), ci_low=low, ci_high=high)
+            flag = f"m__{second}__is_fallback"
+            if flag in frame:
+                keep = ~frame[flag].fillna(False).astype(bool).to_numpy()
+                row["delta_non_fallback"] = float(np.nanmean(diff[keep])) if keep.any() else float("nan")
+            if rule == "noninferior":
+                row["superior"] = bool(low > 0)
+                row["holds"] = bool(low > -margin)
+            else:
+                row["holds"] = bool(low > -margin and high < margin)
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def claim_verdicts(table: pd.DataFrame) -> list[dict[str, Any]]:
+    """One verdict per audit claim: SUPPORTED only if every comparison holds."""
+    verdicts = []
+    if table.empty:
+        return verdicts
+    for claim, part in table.groupby("claim", sort=False):
+        if part["holds"].isna().any():
+            verdict = "NOT ESTIMABLE"
+        else:
+            verdict = "SUPPORTED" if bool(part["holds"].astype(bool).all()) else "NOT SUPPORTED"
+        verdicts.append({"claim": claim, "num_comparisons": int(len(part)), "verdict": verdict})
+    return verdicts
+
+
 def headroom_table(frame: pd.DataFrame) -> pd.DataFrame:
     real = [name for name in _names(frame) if not _is_control(name)]
     rows = []
@@ -242,8 +304,14 @@ def main() -> None:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--bootstrap-samples", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--evidence-config", default="config/evidence_config.yaml", help="Source of analysis.audit_claims.")
     args = parser.parse_args()
     logging.basicConfig(level="INFO", format="[%(asctime)s %(name)s %(levelname)s] %(message)s")
+    config_path = Path(args.evidence_config)
+    if not config_path.is_absolute() and not config_path.exists():
+        config_path = PROJECT_ROOT / config_path
+    with config_path.open("r", encoding="utf-8") as handle:
+        claims_cfg = dict(((yaml.safe_load(handle) or {}).get("analysis") or {}).get("audit_claims") or {})
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -261,6 +329,8 @@ def main() -> None:
         headroom = headroom_table(part)
         agreement = pseudo_gt_agreement(part)
         fallbacks = fallback_table(part)
+        audit = audit_claims(part, claims_cfg, args.bootstrap_samples, rng)
+        verdicts = claim_verdicts(audit)
         for name, table in (
             ("methods", methods),
             ("by_size", sizes),
@@ -268,6 +338,7 @@ def main() -> None:
             ("conditioning", conditioning),
             ("headroom", headroom),
             ("fallback", fallbacks),
+            ("audit_claims", audit),
         ):
             table.to_csv(output_dir / f"{name}_{run}.csv", index=False)
 
@@ -286,9 +357,17 @@ def main() -> None:
             "headroom": headroom.to_dict(orient="records"),
             "size_trend": trend.to_dict(orient="records"),
             "fallback": fallbacks[fallbacks["n_fallback"] > 0].to_dict(orient="records") if not fallbacks.empty else [],
+            "audit_claims": verdicts,
+            "audit_comparisons": audit.to_dict(orient="records"),
         }
+        audit_columns = ["claim", "comparison", "delta", "ci_low", "ci_high", "delta_non_fallback", "superior", "holds"]
         report += [
             f"## {run} ({len(part)} explained detections)",
+            "",
+            "### Pre-registered audit claims",
+            *[f"- **{item['claim']}** ({item['num_comparisons']} comparisons) -> {item['verdict']}" for item in verdicts],
+            "",
+            _markdown(audit[[c for c in audit_columns if c in audit]].round(4)) if not audit.empty else "(no audit claims configured)",
             "",
             "### Methods and controls (mean over detections; TP only for *_gt)",
             methods[[c for c in ["method", "is_control", "composite", "ebpg", "oa", "oa_box", "sparsity", "ebpg_gt", "explain_time", "is_fallback"] if c in methods]]

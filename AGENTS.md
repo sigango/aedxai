@@ -32,7 +32,7 @@ config/
   xai_config.yaml
   eval_config.yaml
   evidence_config.yaml        # v2 evidence runs (full, dev pilot)
-  evidence_config_lite.yaml   # v2 evidence runs (calib/test/cross-domain)
+  evidence_config_lite.yaml   # v2 TEST config (COCO test, BDD100K): full method list, <=10 explained/image
 
 src/
   detector.py
@@ -632,8 +632,12 @@ Top-level keys `evidence` (methods, controls, shuffled maps, agreement pairs,
 gradient features, `prenms` and `tta` strong baselines, `max_explained_per_image`,
 saved maps), `vlm_verification`
 and `analysis` (CV folds, bootstrap, gate `gate_delta_auroc: 0.02`, conformal
-`crc_alpha`, acquisition budgets). Freeze the lite config and gate thresholds
-before the test split is run.
+`crc_alpha`, acquisition budgets, and the pre-registered `claims` /
+`audit_claims` that `analyze_evidence.py` / `analyze_metric_validity.py` turn
+into SUPPORTED / NOT SUPPORTED verdicts). The test config, claims and image caps
+are frozen with tag `v2-freeze-test` (`PREREGISTRATION.md`, scenario C after G1
+failed on the dev pilot); do not edit them before the test and BDD100K analyses
+have run.
 
 ## Script Guide
 
@@ -778,7 +782,13 @@ is only the TP/FP endpoint. The G1 gate is `S3_explanation - S2_baseline`, where
 (`DetectorWrapper.detect_candidates`, `pre__`) + gradients incl. Riedlinger-style
 head-group norms (`grad__`, `grad__rg_*`) + TTA stability (`tta__`); the original
 lite gate `S3_lite - S2_output_gradient` is secondary. `cost__*` columns are
-costs, never features. `run_experiments.py` and `run_baseline.py` accept
+costs, never features.
+
+On the shared DGX Spark, start long chains with
+`cluster/launch_unit.sh UNIT TASK[:SHARDS] ...` (a systemd user unit running
+`cluster/run_chain.sh`: retries, memory log in `logs/UNIT_mem.log`), never from
+tmux or a Jupyter terminal. `cluster/task.sh setup-bdd-manifest` builds only the
+BDD100K manifest (`setup-manifests` would rewrite the committed COCO manifest). `run_experiments.py` and `run_baseline.py` accept
 `--image-list/--split` and write `manifest.json`; `run_experiments.py` also
 writes `detections.csv` (chosen method, escalation outcome, fallback flag).
 

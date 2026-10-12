@@ -117,6 +117,17 @@ No work was found that uses perturbation faithfulness, cross-explainer disagreem
 
 **If G1 fails on the dev pilot**, stop the large runs. Write up gate B plus the headroom result as an evaluation paper (XAI4CV non-proceedings track).
 
+**D1 outcome (2026-10-12): G1 failed on the dev pilot for both detectors, so the plan switched to scenario C.**
+
+- The CI upper bounds were +0.0137 (YOLOX-S) and +0.0123 (Faster R-CNN), both below 0.02. This triggered the futility rule fixed before the Faster R-CNN pilot.
+- The test run is still made, but it now confirms the pre-registered claims in `PREREGISTRATION.md`:
+  - H1: no practically relevant gain over `S2_baseline`.
+  - H2: no gain over the placebo maps.
+  - H3: the box prior is not worse than any real method; `gcame_raw` equals `gradcam_raw`.
+  - H4: a VLM check of the box crop adds signal.
+- Both analysis scripts print a verdict for each claim (`analysis.claims`, `analysis.audit_claims`).
+- The calib/τ, legacy, cascade and selector stages are dropped.
+
 The paper-facing metric is unchanged: `composite_weights`, `evaluate_all()` and the composite formula are as in v1. Box-relative OA and GT-box EBPG are *additional* columns from `AutoEvaluator.evaluate_evidence()`.
 
 ## B2. Code changes
@@ -168,15 +179,22 @@ git add manifests/ && git commit -m "Add v2 image manifests" && git push   # the
 
 ## B4. Stages
 
-Stages given in one `submit.sh` call are chained with `afterok`. A pre-empted shard can simply be resubmitted: the runners skip finished images and retry failed ones. On a non-SLURM machine set `BACKEND=local`, `LOCAL_GPUS=0` and `PROCS_PER_GPU=2`.
+Stages given in one `submit.sh` call are chained with `afterok`. A pre-empted shard can simply be resubmitted: the runners skip finished images and retry failed ones.
+
+**On the shared DGX Spark, use `cluster/launch_unit.sh UNIT TASK[:SHARDS] ...` and keep `PROCS_PER_GPU=1`.** It runs the tasks in order through `cluster/run_chain.sh`, inside a systemd user unit with `OOMPolicy=continue`.
+- Each task is retried up to 3 times.
+- Memory use is logged to `logs/UNIT_mem.log`.
+- Do not start long chains from tmux or a Jupyter terminal. The FRCNN pilot died twice that way:
+  - 2026-10-06: the terminal session ended.
+  - 2026-10-09: `jupyterlab.service` was stopped, which killed every tmux pane started from it.
 
 | # | Command | What runs | Decision after it |
 |---|---|---|---|
 | 1 | `cluster/submit.sh pilot vlm-pilot analyze-pilot` | COCO dev, full config (6 methods + 3 controls + 2 shuffled). YOLOX on 300 images, FRCNN on 150. | **D1:** G1 direction (not confirmatory). Measure `image_time` and fix the test budget (B5). Choose the lite method list from `g2_method_value_*.csv` and edit `config/evidence_config_lite.yaml`. Decide D-CLOSE 200 vs 2000 masks. |
-| 2 | `cluster/submit.sh calib calibrate-tau` | COCO calib, G-CAME only; per-detector τ = p30 | Paste `tau_by_detector` into `config/eval_config.yaml` and commit it. This replaces the provisional values, which overlap the old test images. |
-| 3 | `cluster/submit.sh test vlm-test analyze-test` | COCO test, lite config. YOLOX on 2000 images, FRCNN on 1000. | **G1/G2/G3 and B final** (confirmatory) |
-| 4 | `cluster/submit.sh bdd vlm-bdd analyze-bdd` | BDD100K test, lite config. Plan B: FRCNN on the first 300 images (`NUM_IMAGES_bdd_frcnn`) | **X**, with day/night and weather subgroups |
-| 5 | `cluster/submit.sh selector legacy`, then `cluster/submit.sh cascade` | v1 comparison rows on 1000 test images. Plan B (`LEGACY_*`, `CASCADE_DETECTORS` in `cluster.env`): YOLOX gets the 4 baselines, `v1`, `v1orig` and the G-CAME→LIME cascade; FRCNN gets only the GradCAM and G-CAME baselines and `v1` | Comparison rows only |
+| 2 | *(not run in scenario C)* `cluster/submit.sh calib calibrate-tau` | COCO calib, G-CAME only; per-detector τ = p30 | τ only served the legacy cascade |
+| 3 | `cluster/launch_unit.sh aedxai-test evidence-test-yolox:16 evidence-test-frcnn:16 vlm-test-yolox:4 vlm-test-frcnn:4 analyze-test` | COCO test, test config (`evidence_config_lite.yaml`: all methods and controls, ≤10 explained/image). YOLOX on 2000 images, FRCNN on the first 500. | **H1–H4 verdicts** (confirmatory, `PREREGISTRATION.md`) |
+| 4 | `cluster/task.sh setup-bdd-annotations && cluster/task.sh setup-bdd-manifest`, commit the manifest, then `cluster/launch_unit.sh aedxai-bdd evidence-bdd-yolox:16 evidence-bdd-frcnn:16 vlm-bdd-yolox:4 vlm-bdd-frcnn:4 analyze-bdd` | BDD100K test, same config. YOLOX on 1000 images, FRCNN on the first 150. | **X**: the same claims on BDD100K, with day/night and weather subgroups |
+| 5 | *(not run in scenario C)* `cluster/submit.sh selector legacy`, then `cluster/submit.sh cascade` | v1 comparison rows | — |
 
 ## B5. Compute budget
 
@@ -199,14 +217,34 @@ Two processes on one GB10 halve the speed of each, so keep `PROCS_PER_GPU=1`. Th
 | VLM passes (all) | ~10 (both) | |
 | **Total** | **~400 GPU-h ≈ 17 days on one GB10** | |
 
-The full plan (every legacy row, FRCNN on all 1000 BDD images) was ≈800 GPU-h. GPU-h = images × explained-per-image × measured s/detection / 3600. If FRCNN still does not fit, reduce in this order:
+**Scenario C budget (from 2026-10-12).** The test config is the full config with ≤10 explained/image. The full config costs about 1.2× the old lite config.
+
+| Stage | YOLOX (GPU-h) | FRCNN (GPU-h) |
+|---|---:|---:|
+| Test (2000 / 500 images) | ~46 | ~88 |
+| BDD100K (1000 / 150 images) | ~40 | ~44 |
+| VLM passes (all) | ~8 (both) | |
+| **Total** | **~225 GPU-h ≈ 9.5 days on one GB10** | |
+
+The FRCNN dev pilot measured 735–1050 s per image at 9.2 explained detections per image (≤20). The cost of the expensive tier was 72 s per detection, against 0.2 s for the strong baseline.
+
+The plan-B projection above and the full plan (every legacy row, FRCNN on all 1000 BDD images, ≈800 GPU-h) are kept for reference. GPU-h = images × explained-per-image × measured s/detection / 3600. If FRCNN still does not fit, reduce in this order:
 1. `MAX_EXPLAINED=5`.
 2. `NUM_IMAGES_test_frcnn=500`.
 3. Drop D-CLOSE for FRCNN only.
 
 Keep YOLOX at full size, since it carries the headline.
 
-**Smoke-run finding for gate B:** G-CAME fell back to the bbox prior on 22.6% of the Faster R-CNN detections (`gcame_raw` 0%, LIME 3.2%, YOLOX 0% for every method). The CAM at `layer4` has no positive mass near the box centre for those detections, so the Gaussian weighting zeroes the map. The v1 Faster R-CNN G-CAME composite (0.7307) may therefore partly be a bbox-prior score. `analyze_metric_validity.py` reports `fallback_*.csv`, and `S3_no_fallback_flag` checks that G1 does not rest on the flag.
+**Smoke-run finding for gate B:** G-CAME fell back to the bbox prior on 22.6% of the Faster R-CNN detections (`gcame_raw` 0%, LIME 3.2%, YOLOX 0% for every method). These figures come from 3 images.
+
+The dev pilot measured lower rates:
+
+| Method | Faster R-CNN | YOLOX-S |
+|---|---:|---:|
+| G-CAME | 5.65% | 1.2% |
+| LIME | 1.3% | |
+
+On Faster R-CNN, the fallback detections have a higher TP rate (0.62 vs 0.51). Their composite is that of the bbox prior (0.78), which lifts G-CAME's composite from 0.7277 (non-fallback detections) to 0.7307. The CAM at `layer4` has no positive mass near the box centre for those detections, so the Gaussian weighting zeroes the map. The v1 Faster R-CNN G-CAME composite (0.7307) may therefore partly be a bbox-prior score. `analyze_metric_validity.py` reports `fallback_*.csv`, and `S3_no_fallback_flag` checks that G1 does not rest on the flag.
 
 ## B6. Outputs → paper
 
@@ -224,8 +262,9 @@ Keep YOLOX at full size, since it carries the headline.
 ## B7. Reproducibility checklist and risks
 
 - [ ] `manifests/*.json` committed before stage 1; the test split is never used for model or threshold choices.
-- [ ] `tau_by_detector` replaced with the stage-2 output before stage 5.
-- [ ] Lite config and gate thresholds frozen (committed) after D1, before stage 3.
+- [x] ~~`tau_by_detector` replaced with the stage-2 output before stage 5.~~ Not needed in scenario C.
+- [ ] Test config, claims and image caps frozen with tag `v2-freeze-test` (`PREREGISTRATION.md`) before stage 3.
+- [ ] BDD100K manifest committed before stage 4; nothing else changes after the tag.
 - [ ] Every shard manifest shows `dirty: false` and the same commit.
 - [ ] `results/` archived per stage together with its manifests.
 
@@ -236,16 +275,16 @@ Risks:
 - **VLM token ids.** On the first shard, check that `vlm__box_answer_mass` ≈ 1. A low value means the Yes/No token ids are wrong for the tokenizer.
 - **OOM:** lower `lime.batch_size` / `dclose.batch_size` (32 → 8 for FRCNN) and `evidence.evaluator_batch_size` (11 → 4). Values do not change, only speed.
 - **bitsandbytes on ARM64/GB10:** keep `vlm.quantization: fp16`.
+- **Shared GB10:** other users' jobs filled the RAM at least once (OOM, 2026-10-11). Start chains with `cluster/launch_unit.sh` and watch `logs/UNIT_mem.log`. A steady rise of `pipeline_rss` would point to a leak in our own runner.
 
 ## B8. Timeline
 
 | Weeks | Work |
 |---|---|
-| 1 | Setup, env check, stage 1 pilot, D1 |
-| 2 | Stage 2 (τ), freeze the lite config, start stage 3 |
-| 3–4 | Stage 3 (FRCNN is the long pole), stage 4 BDD100K |
-| 5 | Stage 5 legacy rows, analyses, figures |
-| 6–8 | Writing and related-work search |
+| 1–2 | Setup, env check, stage 1 pilot, D1 (done 2026-10-12: scenario C) |
+| 3 | Freeze (`v2-freeze-test`), stage 3 COCO test (~6 days) |
+| 4 | Stage 4 BDD100K (~4 days), analyses, figures |
+| 5–8 | Writing (scenario C outline, `PAPER_OUTLINE.md` §7) and related-work search |
 
 ## B9. Notebook workflow
 

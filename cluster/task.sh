@@ -6,13 +6,14 @@
 #
 # Tasks (DET = yolox | frcnn):
 #   setup-manifests                 COCO + BDD100K manifests (CPU)
+#   setup-bdd-manifest              BDD100K manifest only (leaves the committed COCO manifest untouched)
 #   setup-bdd-annotations           BDD100K -> COCO-80 annotations (CPU)
 #   evidence-smoke-DET              3 dev images, full config (notebook 06 smoke test)
 #   vlm-smoke-DET                   VLM pass over the smoke run
 #   evidence-pilot-DET              dev split, full evidence config
 #   evidence-calib-DET              calib split, lite config
-#   evidence-test-DET               test split, lite config
-#   evidence-bdd-DET                BDD100K test split, lite config
+#   evidence-test-DET               test split, test config (evidence_config_lite.yaml)
+#   evidence-bdd-DET                BDD100K test split, test config
 #   vlm-pilot-DET | vlm-test-DET | vlm-bdd-DET   VLM pass over an evidence run
 #   selector-DET                    retrain the legacy selector from the existing progress CSV
 #   baseline-DET-METHOD             legacy fixed-method baseline on the COCO test split
@@ -82,6 +83,10 @@ case "${TASK}" in
         --exclude-oracle-csvs "" --splits calib:300,test:1000 --output "${BDD_MANIFEST}"
     fi
     ;;
+  setup-bdd-manifest)
+    run scripts/make_manifests.py --images-dir "${BDD_IMAGES}" --annotations "${BDD_ANN}" \
+      --exclude-oracle-csvs "" --splits calib:300,test:1000 --output "${BDD_MANIFEST}"
+    ;;
   setup-bdd-annotations)
     run scripts/convert_annotations.py --format bdd100k --source "${BDD_LABELS}" \
       --images-dir "${BDD_IMAGES}" --output "${BDD_ANN}"
@@ -139,7 +144,7 @@ case "${TASK}" in
     if (( ${#existing[@]} == 0 )); then echo "No evidence runs found for ${prefix}" >&2; exit 1; fi
     run scripts/analyze_evidence.py --run-dirs "${existing[@]}" --evidence-config "${cfg}" \
       --output-dir "results/analysis/evidence_${prefix}"
-    run scripts/analyze_metric_validity.py --run-dirs "${existing[@]}" \
+    run scripts/analyze_metric_validity.py --run-dirs "${existing[@]}" --evidence-config "${cfg}" \
       --output-dir "results/analysis/metric_validity_${prefix}"
     ;;
   *)

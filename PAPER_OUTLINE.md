@@ -6,6 +6,52 @@ Quy ước giống `RESULTS_AND_PLAN.md`: **Fact** là số tính được từ 
 
 ---
 
+## 0. Cập nhật sau pilot dev (2026-10-12): chuyển sang kịch bản C
+
+**Fact (pilot dev, COCO).** G1 fail trên cả hai detector, nên quy tắc dừng sớm đã đặt trước được kích hoạt:
+
+| | YOLOX-S (1552 det / 296 ảnh) | Faster R-CNN (1380 det / 150 ảnh) |
+|---|---|---|
+| G1: `S3_explanation` − `S2_baseline` | +0,0031 [−0,0083; +0,0137] | +0,0044 [−0,0024; +0,0123] |
+| Explanation so với placebo | +0,0056 (không ý nghĩa) | −0,0008 (không ý nghĩa) |
+| VLM theo box, cộng vào baseline mạnh | **+0,0178** [+0,0058; +0,0293] | **+0,0062** [+0,0011; +0,0116] |
+| bbox prior so với phương pháp thật | composite cao nhất; OA cao nhất (0,484) | composite 0,7313 so với 0,7307 (G-CAME); OA 0,561 so với 0,485 (D-CLOSE) |
+| `gcame_raw` so với `gradcam_raw` | 0,4438 / 0,4439 | 0,5241 / 0,5241 |
+
+**Quyết định.**
+- Dàn bài chính giờ là **mục 7 (kịch bản C)**. Mục 6 chỉ giữ để tham khảo.
+- Các xác suất ở mục 1 và 4 đã lỗi thời:
+  - kịch bản A: gần như không còn khả năng;
+  - kịch bản C: gần như chắc chắn viết được;
+  - xác suất được nhận ở XAI4CV hoặc SAIAD (Ước tính): khoảng 55–65%.
+
+**Phát hiện mới bổ sung cho mục 7:**
+1. **Baseline mạnh hấp thụ phần lợi của explanation** (Faster R-CNN):
+   - So với baseline yếu (output + gradient), explanation thắng có ý nghĩa: +0,012 [+0,003; +0,022].
+   - MetaDetect (+0,0095) và TTA (+0,0112) đều có ý nghĩa và hấp thụ phần lợi đó. Sau khi thêm chúng, explanation chỉ còn +0,004.
+   - Trên YOLOX không thấy hiện tượng này, nên trình bày như kết quả phụ.
+2. **Explanation không tốt hơn placebo.** Tín hiệu đều có thể lấy từ map hình box khi chấm bằng cùng các phép đo perturbation.
+3. **Audit lặp lại trên cả hai detector:**
+   - bbox prior ≥ mọi phương pháp thật về composite, và có OA cao nhất;
+   - G-CAME = Grad-CAM × Gaussian;
+   - headroom khi chọn phương pháp cho từng detection chỉ 0,3–0,4%.
+4. **Fallback làm G-CAME trên Faster R-CNN trông tốt hơn thực tế.** G-CAME dùng bbox prior thay thế ở 5,65% detection. Bỏ các detection này đi thì composite của G-CAME là 0,7277, thấp hơn bbox prior. Nên báo cáo số đã bỏ fallback.
+5. **Xu hướng OA theo kích thước vật thể có cả ở bbox prior** (large − small = −0,17). Vậy đây là đặc tính của metric, không phải của explanation.
+6. **VLM nhìn crop quanh box có ích trên cả hai detector.** Crop theo saliency không thêm được gì.
+7. **Chi phí:** trên Faster R-CNN, explanation tốn 72 s mỗi detection, so với 0,2 s của baseline mạnh, để đổi lấy khoảng +0,004 AUROC.
+
+**Kế hoạch chạy:**
+- `PREREGISTRATION.md` với các claim H1–H4, tag `v2-freeze-test`.
+- Test COCO: YOLOX 2000 ảnh, Faster R-CNN 500 ảnh.
+- BDD100K: YOLOX 1000 ảnh, Faster R-CNN 150 ảnh.
+- Tổng khoảng 225 GPU-h. Bỏ các stage calib/τ, legacy và cascade.
+
+**Việc viết tiếp theo:**
+- Sửa đoạn kết quả và đóng góp trong intro theo kịch bản C.
+- Viết phần audit (§3 của dàn bài C) bằng số dev, rồi thay bằng số test khi có.
+
+---
+
 ## 1. Kết luận ngắn
 
 | Câu hỏi | Trả lời |
@@ -254,9 +300,16 @@ Các mục dưới đây phải đóng băng *trước* test split, vì gate và
 4. **Phát hiện 2, hình học box:** control ≥ method; bảng R² của EBPG và Gini theo hình học box; so sánh `*_raw` với phiên bản có điều kiện box.
 5. **Phát hiện 3, artifact của protocol OA:** bước perturbation tính theo phần trăm toàn ảnh xóa hết vật thể nhỏ ngay bước 1; so sánh với box-relative.
 6. **Phát hiện 4, pseudo-GT so với GT box:** xếp hạng có ổn định không.
-7. **Phát hiện 5, explanation evidence không vượt output + gradient:** kết quả âm có CI chặt, cho biết giới hạn trên của lượng thông tin.
-8. **Khuyến nghị:** checklist cho người đánh giá XAI detection (luôn báo cáo control không dùng model, box-relative OA, endpoint độc lập, đăng ký trước).
-9. **Limitations and conclusion.**
+7. **Phát hiện 5, explanation evidence không vượt baseline mạnh (H1, H2):**
+   - Kết quả âm với CI chặt, cho biết giới hạn trên của lượng thông tin explanation mang thêm.
+   - Explanation không tốt hơn placebo.
+   - So với baseline yếu thì explanation có vẻ thắng (+0,012 trên Faster R-CNN), nhưng phần lợi đó biến mất khi thêm MetaDetect và TTA.
+   - Hình chính: forest plot so sánh baseline yếu, baseline mạnh và placebo.
+8. **Phát hiện 6, kiểm tra bằng VLM (H4):**
+   - VLM nhìn crop quanh box có thêm tín hiệu thật; crop theo saliency thì không.
+   - Phân tích theo loại FP: VLM giúp với FP nền và FP sai lớp, không giúp với FP lệch vị trí.
+9. **Khuyến nghị:** checklist cho người đánh giá XAI cho detection: luôn báo cáo control không dùng mô hình, box-relative OA, tỷ lệ fallback, endpoint độc lập, baseline mạnh và đăng ký trước.
+10. **Limitations and conclusion.**
 
 Hình / bảng: Bảng 1 (method so với control), Hình OA theo size, bảng R², bảng headroom, forest plot G1 (âm tính), phần câu chuyện v1 (A3) đưa vào supplement.
 

@@ -2,7 +2,16 @@
 
 Tài liệu này là bản hướng dẫn thực hành cho Part B của `RESULTS_AND_PLAN.md`. Mọi lệnh đều đi qua `cluster/submit.sh` và `cluster/task.sh`, nên chạy từ notebook 07 hay từ terminal đều ra cùng một lệnh.
 
-Các con số GPU-h ở mục 0 lấy từ **số đo thật** trên một DGX Spark (GB10) ở bước smoke ngày 2026-10-01 (mục B5 của `RESULTS_AND_PLAN.md`). Riêng BDD và legacy vẫn là ngoại suy. Kế hoạch đang dùng là **phương án B**: chạy đầy đủ trên COCO cho cả hai detector, chỉ cắt bớt phần chuyển miền (BDD) và các hàng v1 của Faster R-CNN.
+Các con số GPU-h ở mục 0 lấy từ **số đo thật** trên một DGX Spark (GB10) ở bước smoke ngày 2026-10-01 (mục B5 của `RESULTS_AND_PLAN.md`). Riêng BDD và legacy vẫn là ngoại suy.
+
+> **Cập nhật 2026-10-12: D1 chuyển sang kịch bản C.** G1 fail ở pilot dev cho cả hai detector: cận trên CI là +0,0137 (YOLOX) và +0,0123 (FRCNN), đều < 0,02.
+> - Lần chạy test giờ dùng để khẳng định các claim H1–H4 trong `PREREGISTRATION.md`. Tag đóng băng là `v2-freeze-test`.
+> - Phạm vi chạy:
+>   - test COCO: YOLOX 2000 ảnh, FRCNN 500 ảnh;
+>   - BDD100K: YOLOX 1000 ảnh, FRCNN 150 ảnh;
+>   - tổng khoảng 225 GPU-h, tức khoảng 9,5 ngày.
+> - **Bỏ hẳn** các stage calib/τ, legacy, cascade và selector.
+> - Trên DGX Spark, mọi chuỗi chạy dài đều khởi động bằng `cluster/launch_unit.sh` (mục 7). **Không** chạy trong tmux hay terminal của Jupyter.
 
 ---
 
@@ -23,7 +32,12 @@ Các con số GPU-h ở mục 0 lấy từ **số đo thật** trên một DGX S
 | bdd | `bdd vlm-bdd analyze-bdd` | 33 | 71 (300 ảnh) | X (chuyển miền) |
 | legacy | `selector legacy`, sau đó `cascade` | 31 | 21 | Chỉ để có hàng so sánh v1 |
 
-- **Tổng phương án B:** khoảng 400 GPU-h, cộng khoảng 10 giờ cho VLM. Trên một GB10 là khoảng **17 ngày chạy liên tục**.
+- **Tổng phương án B** (giữ để tham khảo): khoảng 400 GPU-h, cộng khoảng 10 giờ cho VLM. Trên một GB10 là khoảng **17 ngày chạy liên tục**.
+- **Kịch bản C (đang dùng):**
+  - test: YOLOX khoảng 46 GPU-h, FRCNN 500 ảnh khoảng 88 GPU-h;
+  - BDD: YOLOX khoảng 40 GPU-h, FRCNN 150 ảnh khoảng 44 GPU-h;
+  - VLM khoảng 8 GPU-h;
+  - tổng khoảng 225 GPU-h.
 - **Một tiến trình mỗi GPU (`PROCS_PER_GPU=1`).** Khi hai tiến trình Faster R-CNN chạy chung một GB10, mỗi tiến trình chậm đi khoảng 2,1 lần, nên tổng tốc độ không tăng.
 - Baseline mạnh (pre-NMS và TTA) tốn thêm 5 lượt forward mỗi ảnh, không đáng kể so với explainer.
 - Faster R-CNN là phần tốn nhất: pilot, test, BDD và các baseline LIME / D-CLOSE của legacy.
@@ -212,9 +226,9 @@ git add config/evidence_config_lite.yaml && git commit -m "D1: freeze lite metho
 
 ---
 
-## 5. Calib và τ
+## 5. Calib và τ (bỏ trong kịch bản C)
 
-Stage này chỉ phục vụ cascade ở stage legacy.
+Stage này chỉ phục vụ cascade ở stage legacy, nên kịch bản C không chạy nó. Phần dưới đây giữ lại để tham khảo.
 
 ```bash
 cluster/submit.sh calib calibrate-tau
@@ -227,6 +241,14 @@ cluster/submit.sh calib calibrate-tau
 ---
 
 ## 6. Đóng băng trước test (đăng ký trước)
+
+**Kịch bản C:** tag `v2-freeze-test` đã được gắn trên máy local rồi push lên GitHub, cùng với `PREREGISTRATION.md`, config test và claim. Trên cluster, chỉ cần kéo về và kiểm tra:
+
+```bash
+git pull --ff-only && git fetch --tags && echo "== Tag at HEAD:" && git describe --tags --exact-match && echo "== Uncommitted changes (must be empty):" && git status --short
+```
+
+Các bước gốc (để tham khảo):
 
 1. Commit các file đầu vào sẽ bị khóa:
    - `config/evidence_config_lite.yaml` (bao gồm mục `analysis`: `gate_delta_auroc`, `crc_alpha`, budgets);
@@ -245,23 +267,49 @@ Sau bước này, **không sửa config hay code** cho đến khi stage test, BD
 
 ## 7. Test COCO (chạy khẳng định)
 
+**Trên DGX Spark** (kịch bản C), sửa giới hạn số ảnh trong `cluster/cluster.env` (file này không được commit) cho khớp với bản đăng ký trước, rồi khởi động user unit:
+
 ```bash
-cluster/submit.sh test vlm-test analyze-test
+sed -i 's/^NUM_IMAGES_test_frcnn=.*/NUM_IMAGES_test_frcnn=500/; s/^NUM_IMAGES_bdd_frcnn=.*/NUM_IMAGES_bdd_frcnn=150/' cluster/cluster.env && grep -E "^(NUM_IMAGES|PROCS_PER_GPU)" cluster/cluster.env
+cluster/launch_unit.sh aedxai-test evidence-test-yolox:16 evidence-test-frcnn:16 vlm-test-yolox:4 vlm-test-frcnn:4 analyze-test
 ```
 
-- YOLOX xong nhanh. FRCNN là phần tốn thời gian nhất (16 shard × 5–10 h, ước tính).
-- Đọc kết quả: `results/analysis/evidence_coco_test/report.md` (G1–G3) và `results/analysis/metric_validity_coco_test/` (gate B).
+- `launch_unit.sh` sẽ từ chối chạy nếu repo có thay đổi chưa commit, hoặc nếu đang có một tiến trình `run_evidence`/`run_vlm_verification` khác.
+- Unit chạy bằng `systemd-run --user` với `OOMPolicy=continue`. Mỗi task được thử lại tối đa 3 lần.
+- Theo dõi:
+  - trạng thái unit: `systemctl --user status aedxai-test`;
+  - log tổng: `logs/aedxai-test.log`;
+  - log của từng task: `logs/<task>.log`;
+  - mức dùng bộ nhớ: `logs/aedxai-test_mem.log`.
+- Dừng unit bằng `systemctl --user stop aedxai-test`. Khởi động lại bằng đúng lệnh cũ, runner sẽ tự resume.
+- YOLOX mất khoảng 2 ngày. FRCNN 500 ảnh mất khoảng 3,5–4 ngày.
+- Đọc kết quả:
+  - `results/analysis/evidence_coco_test/report.md`: verdict H1, H2, H4, cùng G1–G3;
+  - `results/analysis/metric_validity_coco_test/report.md`: verdict H3a–H3c và phần audit.
 - Ghi lại verdict ngay, **không chạy lại với ngưỡng khác**.
+
+Trên SLURM: `cluster/submit.sh test vlm-test analyze-test`.
 
 ## 8. BDD100K
 
-```bash
-cluster/submit.sh bdd vlm-bdd analyze-bdd     # dùng đúng lite config đã đóng băng
-```
+1. **Nhãn (bạn tự tải, cần tài khoản BDD100K):** đặt file `det_20` của tập val vào `data/bdd100k/labels/det_20/det_val.json` (đường dẫn `BDD_LABELS` trong `cluster.env`). Ảnh val nằm ở `data/bdd100k/images/100k/val`.
+2. **Chuyển nhãn sang COCO-80 và tạo manifest BDD**, sau đó commit manifest. Đây là commit duy nhất được phép sau tag; xem mục 6 của `PREREGISTRATION.md`:
+   ```bash
+   bash cluster/task.sh setup-bdd-annotations && bash cluster/task.sh setup-bdd-manifest && git add manifests/bdd100k_val_v2.json && git commit -m "Add BDD100K manifest (pre-registered, seed 2026)" && git push
+   ```
+   `setup-bdd-manifest` chỉ tạo manifest BDD. **Không** dùng `setup-manifests`, vì lệnh đó ghi lại manifest COCO với timestamp mới, làm repo bị dirty.
+3. **Chạy BDD** sau khi unit `aedxai-test` đã xong:
+   ```bash
+   cluster/launch_unit.sh aedxai-bdd evidence-bdd-yolox:16 evidence-bdd-frcnn:16 vlm-bdd-yolox:4 vlm-bdd-frcnn:4 analyze-bdd
+   ```
+
+Trên SLURM: `cluster/submit.sh bdd vlm-bdd analyze-bdd`.
 
 Kết quả nằm ở `results/analysis/evidence_bdd_test/` (subgroup ngày/đêm và thời tiết trong `subgroup_auroc_*.csv`).
 
-## 9. Legacy v1 (ưu tiên thấp nhất, chạy cuối)
+## 9. Legacy v1 (bỏ trong kịch bản C)
+
+Kịch bản C không chạy stage này. Phần dưới đây giữ lại để tham khảo.
 
 ```bash
 AEDXAI_ENV=cluster/cluster_long.env cluster/submit.sh selector legacy    # SLURM_TIME dài, ví dụ 72:00:00
@@ -295,6 +343,7 @@ rsync -av --exclude='maps/' <user>@<cluster>:<clone>/results/ results/
 | Trạng thái, thời gian, RAM | `sacct -j <jobid> --format=JobID,State,Elapsed,MaxRSS` |
 | Log từng shard | `logs/aedxai-<task>_<jobid>_<shard>.out` |
 | Tiến độ | notebook 07 (`nbu.evidence_progress`) hoặc `wc -l results/evidence/<run>/records/*.jsonl` |
+| Unit trên DGX Spark | `export XDG_RUNTIME_DIR=/run/user/$(id -u); systemctl --user status <unit>`; `grep -a "== 20" logs/<unit>.log \| tail`; `tail logs/<unit>_mem.log` |
 | Ảnh bị lỗi | `grep -h '"error"' results/evidence/<run>/records/*.jsonl \| head` |
 | Chạy lại shard bị preempt hoặc timeout | Chạy lại **cùng stage**. Ảnh đã xong sẽ bị bỏ qua, ảnh lỗi được thử lại |
 | Chạy tay một shard | `srun --gres=gpu:1 [--partition … --account …] cluster/task.sh evidence-test-frcnn 5 16` (shard 5 trên 16) |
@@ -306,7 +355,10 @@ rsync -av --exclude='maps/' <user>@<cluster>:<clone>/results/ results/
   - Chỉ sửa code trên máy local, push lên, rồi `git pull` trên cluster, và chỉ làm vậy *giữa* các stage.
   - Trên cluster chỉ commit ba loại thay đổi: manifest, lite config sau D1, và τ.
 - **VLM:** nếu `vlm__box_answer_mass` thấp thì dừng và sửa token id. Trên GPU 24 GB, chạy mỗi GPU một tiến trình VLM.
-- **Backend local** (workstation / DGX Spark): `submit.sh` sẽ chặn cho đến khi stage xong. Chạy trong `tmux` hoặc `screen`, log nằm ở `logs/<task>_shard*.log`.
+- **Backend local** (workstation): `submit.sh` sẽ chặn cho đến khi stage xong. Chạy trong `tmux` hoặc `screen`, log nằm ở `logs/<task>_shard*.log`.
+- **DGX Spark dùng chung:** chỉ dùng `cluster/launch_unit.sh`. Pilot FRCNN đã chết hai lần vì chạy trong tmux hoặc terminal Jupyter:
+  - 2026-10-06: phiên terminal bị đóng.
+  - 2026-10-09: `jupyterlab.service` bị dừng (`KillMode=control-group`, `OOMPolicy=stop`), kéo theo mọi pane tmux được mở từ Jupyter.
 
 ---
 
@@ -317,9 +369,9 @@ rsync -av --exclude='maps/' <user>@<cluster>:<clone>/results/ results/
 - [ ] Smoke: `ALL CHECKS PASS`, answer mass ≥ 0.9, đã chốt batch size, đã ghi s/detection thực đo
 - [ ] Đã có code baseline mạnh (5.2) trước pilot
 - [ ] Đã ghi D1 vào commit (hướng G1, method lite, D-CLOSE, budget FRCNN)
-- [ ] Đã commit τ
-- [ ] Đã commit các thay đổi phân tích (5.1); tag `v2-freeze-test`; `git status` sạch
-- [ ] Test COCO xong; đã ghi verdict
-- [ ] BDD xong
-- [ ] Legacy / cascade xong, hoặc đã quyết định bỏ và ghi lý do
+- [x] D1 = kịch bản C (2026-10-12); không cần τ
+- [ ] `PREREGISTRATION.md` và tag `v2-freeze-test` đã có trên cluster; `git status` sạch; `cluster.env` đã sửa: FRCNN 500 / 150 ảnh
+- [ ] Test COCO xong; đã ghi verdict H1–H4
+- [ ] Đã commit manifest BDD; BDD xong
+- [x] Legacy / cascade: bỏ (kịch bản C)
 - [ ] Đã lưu trữ `results/` kèm manifest; notebook 08 đã sinh hình

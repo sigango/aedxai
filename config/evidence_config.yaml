@@ -64,10 +64,26 @@ analysis:
   cv_folds: 5
   bootstrap_samples: 2000
   seed: 0
-  # Gate G1: explanation features must add at least this much AUROC over the
-  # output+gradient baseline, with the paired-bootstrap 95% CI excluding 0.
+  # Gate G1 (superiority, reported as PASS/FAIL): explanation features must add at
+  # least this much AUROC over the strong baseline S2_baseline, with the
+  # paired-bootstrap 95% CI excluding 0. Failed on the dev pilot for both detectors.
   gate_delta_auroc: 0.02
   # Conformal risk control targets: expected fraction of accepted false positives.
   crc_alpha: [0.05, 0.10]
   # Budgets (fraction of explained detections that get the expensive evidence tier).
   acquisition_budgets: [0.0, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0]
+  # Pre-registered test claims (PREREGISTRATION.md; frozen with tag v2-freeze-test).
+  # rule "upper": the paired-bootstrap 95% CI upper bound of the AUROC gain stays
+  # below margin (no practically relevant gain); rule "lower": the CI lower bound
+  # exceeds margin (a real gain).
+  claims:
+    H1_no_gain_over_strong_baseline: {pair: "S3_explanation - S2_baseline", rule: upper, margin: 0.02}
+    H2_no_gain_over_placebo: {pair: "S3_explanation - P_controls_only", rule: upper, margin: 0.02}
+    H4_vlm_box_adds_signal: {pair: "S2_plus_vlm_box - S2_baseline", rule: lower, margin: 0.0}
+  # Metric-audit claims (scripts/analyze_metric_validity.py), per-detection metric
+  # differences with an image bootstrap. noninferior: reference - every real method
+  # has CI low > -margin; equivalent: the CI of pair[0] - pair[1] is inside +-margin.
+  audit_claims:
+    H3a_box_prior_not_worse_composite: {reference: bbox_prior, metric: composite, rule: noninferior, margin: 0.01}
+    H3b_box_prior_not_worse_oa: {reference: bbox_prior, metric: oa, rule: noninferior, margin: 0.01}
+    H3c_gcame_raw_equals_gradcam_raw: {pair: [gcame_raw, gradcam_raw], metric: composite, rule: equivalent, margin: 0.01}

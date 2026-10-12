@@ -149,11 +149,15 @@ def test_analysis_scripts_on_synthetic_run(tmp_path: Path) -> None:
     assert "m__gcame__is_fallback" in sets["S3_explanation"] and "m__gcame__is_fallback" not in sets["S3_no_fallback_flag"]
     assert not any(column.startswith(("cf__", "cfb__")) for column in sets["S3_map_only"])
     assert not any(column.startswith("mf__") for column in sets["S3_curves_only"])
-    cfg = {"cv_folds": 3, "bootstrap_samples": 30, "ap_bootstrap_samples": 5, "crc_alpha": [0.1], "acquisition_budgets": [0.0, 0.5, 1.0]}
+    cfg = {"cv_folds": 3, "bootstrap_samples": 30, "ap_bootstrap_samples": 5, "crc_alpha": [0.1], "acquisition_budgets": [0.0, 0.5, 1.0],
+           "claims": {"H1": {"pair": "S3_explanation - S2_baseline", "rule": "upper", "margin": 0.02},
+                      "H4": {"pair": "S2_plus_vlm_box - S2_baseline", "rule": "lower", "margin": 0.0}}}
     out = tmp_path / "analysis"
     out.mkdir()
     summary = analyze.analyze_detector(frame, images_for_ap([run_dir]), "toy_run", cfg, out)
     assert summary["g1"]["gate"] == "S3_explanation - S2_baseline"
+    # The toy explanation carries the TP signal, so "no gain" is rejected; the toy run has no VLM pass.
+    assert [(c["claim"], c["verdict"]) for c in summary["claims"]] == [("H1", "NOT SUPPORTED"), ("H4", "NOT ESTIMABLE")]
     assert summary["g1"]["bootstrap"]["S3_explanation - S2_baseline"]["delta_auroc"] > 0.05
     assert summary["g1"]["bootstrap"]["S3_lite - S2_output_gradient"]["delta_auroc"] > 0.05
     assert (out / "fp_type_auroc_toy_run.csv").exists() and summary["g1"]["fp_type_auroc"][0]["fp_type"] == "background"
@@ -169,6 +173,20 @@ def test_analysis_scripts_on_synthetic_run(tmp_path: Path) -> None:
     assert 0.1 < fallbacks.loc["gcame", "fallback_rate"] < 0.3
     assert {"composite_non_fallback", "bbox_prior_composite_fallback_rows", "tp_rate_fallback"} <= set(fallbacks.columns)
 
+    audit_cfg = {
+        "composite": {"reference": "bbox_prior", "metric": "composite", "rule": "noninferior", "margin": 0.01},
+        "oa": {"reference": "bbox_prior", "metric": "oa", "rule": "noninferior", "margin": 0.01},
+        "raw": {"pair": ["gcame_raw", "gradcam_raw"], "metric": "composite", "rule": "equivalent", "margin": 0.01},
+    }
+    audit = validity.audit_claims(frame[frame["explained"]], audit_cfg, samples=50, rng=np.random.default_rng(0))
+    rows = audit.set_index("claim")
+    # Equal composites (0.6 each); the toy gcame OA tracks the TP signal, the bbox prior's is noise around 0.
+    assert rows.loc["composite", "comparison"] == "bbox_prior - gcame" and rows.loc["composite", "delta"] == pytest.approx(0.0)
+    assert bool(rows.loc["composite", "holds"]) and not bool(rows.loc["oa", "holds"])
+    assert "delta_non_fallback" in audit
+    assert [(v["claim"], v["verdict"]) for v in validity.claim_verdicts(audit)] == [
+        ("composite", "SUPPORTED"), ("oa", "NOT SUPPORTED"), ("raw", "NOT ESTIMABLE")]
+
 
 def test_analyze_evidence_cli_writes_report(tmp_path: Path, monkeypatch) -> None:
     import sys
@@ -178,20 +196,49 @@ def test_analyze_evidence_cli_writes_report(tmp_path: Path, monkeypatch) -> None
     run_dir = tmp_path / "toy_run"
     _synthetic_run(run_dir, num_images=60, seed=1)
     config = tmp_path / "evidence.yaml"
-    config.write_text(yaml.safe_dump({"analysis": {"cv_folds": 3, "bootstrap_samples": 20, "ap_bootstrap_samples": 3,
-                                                   "crc_alpha": [0.1], "acquisition_budgets": [0.0, 1.0]}}))
+    config.write_text(yaml.safe_dump({"analysis": {
+        "cv_folds": 3, "bootstrap_samples": 20, "ap_bootstrap_samples": 3, "crc_alpha": [0.1], "acquisition_budgets": [0.0, 1.0],
+        "claims": {"H1_no_gain": {"pair": "S3_explanation - S2_baseline", "rule": "upper", "margin": 0.02}},
+        "audit_claims": {"H3a": {"reference": "bbox_prior", "metric": "composite", "rule": "noninferior", "margin": 0.01}},
+    }}))
     out = tmp_path / "analysis"
     analyze = _load_script("analyze_evidence")
     monkeypatch.setattr(sys, "argv", ["analyze_evidence.py", "--run-dirs", str(run_dir), "--output-dir", str(out),
                                       "--evidence-config", str(config)])
     analyze.main()
     report = (out / "report.md").read_text()
-    assert "G1" in report and "toy_run" in report
+    assert "G1" in report and "toy_run" in report and "**H1_no_gain**" in report
     assert json.loads((out / "summary.json").read_text())[0]["detector"] == "toy_run"
 
     validity = _load_script("analyze_metric_validity")
     monkeypatch.setattr(sys, "argv", ["analyze_metric_validity.py", "--run-dirs", str(run_dir), "--output-dir",
-                                      str(tmp_path / "validity"), "--bootstrap-samples", "10"])
+                                      str(tmp_path / "validity"), "--bootstrap-samples", "10", "--evidence-config", str(config)])
     validity.main()
-    assert (tmp_path / "validity" / "report.md").exists()
+    assert "**H3a** (1 comparisons) -> SUPPORTED" in (tmp_path / "validity" / "report.md").read_text()
+    assert (tmp_path / "validity" / "audit_claims_toy_run.csv").exists()
     assert (tmp_path / "validity" / "fallback_toy_run.csv").exists()
+
+
+def test_evaluate_claims_rules() -> None:
+    analyze = _load_script("analyze_evidence")
+    bootstrap = {
+        "S3 - S2": {"delta_auroc": 0.004, "ci_low": -0.002, "ci_high": 0.012},
+        "V - S2": {"delta_auroc": 0.03, "ci_low": 0.025, "ci_high": 0.035},
+    }
+    claims = {
+        "no_gain": {"pair": "S3 - S2", "rule": "upper", "margin": 0.02},
+        "no_gain_violated": {"pair": "V - S2", "rule": "upper", "margin": 0.02},
+        "gain": {"pair": "V - S2", "rule": "lower", "margin": 0.0},
+        "gain_absent": {"pair": "S3 - S2", "rule": "lower", "margin": 0.0},
+        "missing": {"pair": "X - S2", "rule": "upper", "margin": 0.02},
+    }
+    verdicts = {row["claim"]: row["verdict"] for row in analyze.evaluate_claims(bootstrap, claims)}
+    assert verdicts == {
+        "no_gain": "SUPPORTED",
+        "no_gain_violated": "NOT SUPPORTED",
+        "gain": "SUPPORTED",
+        "gain_absent": "NOT SUPPORTED",
+        "missing": "NOT ESTIMABLE",
+    }
+    with pytest.raises(ValueError):
+        analyze.evaluate_claims(bootstrap, {"bad": {"pair": "S3 - S2", "rule": "two-sided", "margin": 0.0}})

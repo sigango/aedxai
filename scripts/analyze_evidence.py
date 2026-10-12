@@ -13,6 +13,8 @@ G1  Does explanation evidence predict TP vs FP beyond output, gradient and
     a secondary gate. Placebo sets use only model-free control maps, and the
     ``S3_map_only`` / ``S3_curves_only`` sets split map structure from
     perturbation probing, so a gain can be attributed to explanation content.
+    The pre-registered test claims (``analysis.claims``, PREREGISTRATION.md) get a
+    SUPPORTED / NOT SUPPORTED verdict from the same bootstrap.
 G2  Budget-aware evidence acquisition: when only a fraction of detections can
     get the expensive tier, does choosing them by predicted value of information
     beat uncertainty and random choice at the same compute?
@@ -199,6 +201,37 @@ def comparison_pairs(sets: dict[str, list[str]]) -> list[tuple[str, str]]:
             seen.add(pair)
             kept.append(pair)
     return kept
+
+
+def evaluate_claims(bootstrap: dict[str, dict[str, float]], claims: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Verdicts for the pre-registered claims (``analysis.claims`` in the evidence config).
+
+    Each claim names a bootstrap comparison ``pair`` ("treatment - baseline") and a
+    rule: ``upper`` holds when the 95% CI upper bound of the AUROC gain stays below
+    ``margin`` (no practically relevant gain); ``lower`` holds when the CI lower
+    bound exceeds ``margin`` (a real gain).
+    """
+    rows = []
+    for name, claim in claims.items():
+        pair, rule, margin = str(claim["pair"]), str(claim["rule"]), float(claim["margin"])
+        if rule not in ("upper", "lower"):
+            raise ValueError(f"Claim {name}: unknown rule {rule!r} (use 'upper' or 'lower').")
+        row: dict[str, Any] = {"claim": name, "pair": pair, "rule": rule, "margin": margin}
+        result = bootstrap.get(pair)
+        if not result or not np.isfinite(result.get("ci_low", np.nan)):
+            rows.append({**row, "verdict": "NOT ESTIMABLE"})
+            continue
+        holds = result["ci_high"] < margin if rule == "upper" else result["ci_low"] > margin
+        rows.append(
+            {
+                **row,
+                "delta_auroc": result["delta_auroc"],
+                "ci_low": result["ci_low"],
+                "ci_high": result["ci_high"],
+                "verdict": "SUPPORTED" if holds else "NOT SUPPORTED",
+            }
+        )
+    return rows
 
 
 # ----------------------------------------------------------------------------- models
@@ -567,6 +600,7 @@ def analyze_detector(
     g1_pass = gate["delta_auroc"] >= threshold and gate["ci_low"] > 0
     secondary = bootstrap.get(secondary_key, {})
     secondary_pass = bool(secondary) and secondary["delta_auroc"] >= threshold and secondary["ci_low"] > 0
+    claims = evaluate_claims(bootstrap, dict(cfg.get("claims") or {}))
 
     from sklearn.metrics import roc_auc_score
 
@@ -663,6 +697,7 @@ def analyze_detector(
         "num_explained": int(len(frame)),
         "num_images": int(np.unique(groups).size),
         "tp_rate": float(y.mean()),
+        "claims": claims,
         "g1": {
             "gate": gate_key,
             "threshold": threshold,
@@ -690,6 +725,14 @@ def write_report(summary: list[dict[str, Any]], output_dir: Path) -> None:
             f"- **G1** {g1['gate']}: ΔAUROC {gate['delta_auroc']:+.4f} [95% CI {gate['ci_low']:+.4f}, {gate['ci_high']:+.4f}]"
             f" -> {'PASS' if g1['pass'] else 'FAIL'} (threshold {g1['threshold']})",
         ]
+        for claim in item.get("claims", []):
+            bound = "CI high <" if claim["rule"] == "upper" else "CI low >"
+            estimate = (
+                f"ΔAUROC {claim['delta_auroc']:+.4f} [{claim['ci_low']:+.4f}, {claim['ci_high']:+.4f}]"
+                if "delta_auroc" in claim
+                else "not estimable"
+            )
+            lines.append(f"- **{claim['claim']}** ({claim['pair']}; {bound} {claim['margin']}): {estimate} -> {claim['verdict']}")
         secondary = g1["bootstrap"].get(g1.get("secondary_gate", ""), {})
         if secondary:
             lines.append(
