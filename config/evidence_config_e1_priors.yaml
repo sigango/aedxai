@@ -1,0 +1,31 @@
+# E1 matched-prior audit (PLAN_V3_EVALUATION.md). Re-runs the frozen test images
+# with the same detector settings and cap of explained detections as the test
+# config, but scores only model-free bbox priors of different widths
+# (bbox_prior_sNNN: sigma = NNN/100 x half the box side). bbox_prior_s100 equals
+# the default bbox_prior, so it doubles as a replication check against the test run.
+# No features, gradients, TTA, pre-NMS or maps: only the evaluator scores.
+evidence:
+  max_explained_per_image: 10
+  conf_thresh: null
+  methods: []
+  controls: [bbox_prior_s025, bbox_prior_s035, bbox_prior_s050, bbox_prior_s070, bbox_prior_s100, bbox_prior_s140]
+  shuffled_of: []
+  agreement_pairs: []
+  gradient_features: false
+  prenms:
+    enabled: false
+  tta:
+    enabled: false
+  dclose_final_masks: false
+  gt_iou_threshold: 0.5
+  evaluator_batch_size: 11
+  box_protocol: true
+  save_maps_for: []
+  map_downsample: 2
+
+analysis:
+  bootstrap_samples: 1000
+  seed: 0
+  # E1a: a sparsity-matched bbox prior is not worse than the method on the
+  # composite by more than this margin (CI low of prior - method > -margin).
+  noninferiority_margin: 0.01

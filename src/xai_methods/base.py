@@ -416,14 +416,18 @@ def _extract_matching_confidence_from_output(
     return float(scores[best_index].detach().cpu().item()), best_iou
 
 
-def _bbox_prior_map(image_shape: Sequence[int], detection: Detection) -> np.ndarray:
-    """Create a normalized Gaussian prior centered on the detection bbox."""
+def _bbox_prior_map(image_shape: Sequence[int], detection: Detection, sigma_scale: float = 1.0) -> np.ndarray:
+    """Create a normalized Gaussian prior centered on the detection bbox.
+
+    ``sigma_scale`` multiplies the default sigma (half the box side); the matched-prior
+    audit uses it to build sharper or wider priors with the same centre.
+    """
     height, width = int(image_shape[0]), int(image_shape[1])
     x1, y1, x2, y2 = [int(value) for value in detection.bbox]
     cx = (x1 + x2) / 2.0
     cy = (y1 + y2) / 2.0
-    sigma_x = max(1.0, (x2 - x1) / 2.0)
-    sigma_y = max(1.0, (y2 - y1) / 2.0)
+    sigma_x = max(1.0, sigma_scale * (x2 - x1) / 2.0)
+    sigma_y = max(1.0, sigma_scale * (y2 - y1) / 2.0)
 
     grid_y, grid_x = np.mgrid[0:height, 0:width]
     prior = np.exp(

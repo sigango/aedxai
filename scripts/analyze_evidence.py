@@ -83,7 +83,7 @@ def _numeric(frame: pd.DataFrame, columns: list[str]) -> list[str]:
 def methods_in(frame: pd.DataFrame) -> tuple[list[str], list[str]]:
     """(real explanation methods, control/placebo maps) present in the frame."""
     names = sorted({column.split("__")[1] for column in frame.columns if column.startswith("m__")})
-    controls = [name for name in names if name in CONTROLS or name.startswith("shuffled_")]
+    controls = [name for name in names if name in CONTROLS or name.startswith(("shuffled_", "bbox_prior_s"))]
     return [name for name in names if name not in controls], controls
 
 

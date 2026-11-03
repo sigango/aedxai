@@ -788,7 +788,15 @@ On the shared DGX Spark, start long chains with
 `cluster/launch_unit.sh UNIT TASK[:SHARDS] ...` (a systemd user unit running
 `cluster/run_chain.sh`: retries, memory log in `logs/UNIT_mem.log`), never from
 tmux or a Jupyter terminal. `cluster/task.sh setup-bdd-manifest` builds only the
-BDD100K manifest (`setup-manifests` would rewrite the committed COCO manifest). `run_experiments.py` and `run_baseline.py` accept
+BDD100K manifest (`setup-manifests` would rewrite the committed COCO manifest).
+
+v3 evaluation (`PLAN_V3_EVALUATION.md`, branch `v3-evaluation`): `bbox_prior_sNNN`
+controls are bbox priors with sigma = NNN/100 x half the box side (`bbox_prior` =
+`bbox_prior_s100`); E1 (`evidence-e1priors-DET`, `analyze-e1`,
+`scripts/analyze_matched_priors.py`) compares each method with a sparsity-matched
+prior; E3 (`analyze-e3-DET`, `scripts/analyze_map_verifier.py`) trains a small CNN on
+raw saliency-map crops and stacks it with `S2_baseline`. E1/E3 claims are
+pre-registered in the plan before their runs. `run_experiments.py` and `run_baseline.py` accept
 `--image-list/--split` and write `manifest.json`; `run_experiments.py` also
 writes `detections.csv` (chosen method, escalation outcome, fallback flag).
 

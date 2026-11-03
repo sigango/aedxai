@@ -68,7 +68,8 @@ def _names(frame: pd.DataFrame) -> list[str]:
 
 
 def _is_control(name: str) -> bool:
-    return name in CONTROLS or name.startswith("shuffled_")
+    # bbox_prior_sNNN = scaled bbox priors of the matched-prior audit.
+    return name in CONTROLS or name.startswith(("shuffled_", "bbox_prior_s"))
 
 
 def _bootstrap_mean(values: np.ndarray, groups: np.ndarray, samples: int, rng: np.random.Generator) -> tuple[float, float]:

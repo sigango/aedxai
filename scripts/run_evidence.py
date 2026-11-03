@@ -60,11 +60,9 @@ from src.evidence import (
 from src.gt_matching import AnnotationIndex, match_detections
 from src.provenance import resolve_image_paths, write_manifest
 from src.utils import load_image, set_seed, setup_logging
-from src.xai_methods import CAM_METHODS, base_method_name, get_explainer, shuffle_saliency
+from src.xai_methods import CAM_METHODS, CONTROL_METHODS, base_method_name, get_explainer, is_control_method, shuffle_saliency
 
 logger = logging.getLogger("run_evidence")
-
-CONTROL_METHODS = {"bbox_prior", "center_prior", "random"}
 
 
 def _as_project_path(path: str | Path) -> Path:
@@ -115,8 +113,8 @@ def _build_explainers(
             section["use_final_masks"] = bool(dclose_final_masks)
         explainers[name] = get_explainer(name, section)
     for name in controls:
-        if name not in CONTROL_METHODS:
-            raise ValueError(f"Unknown control '{name}'. Available: {sorted(CONTROL_METHODS)}")
+        if not is_control_method(name):
+            raise ValueError(f"Unknown control '{name}'. Available: {sorted(CONTROL_METHODS)} or bbox_prior_sNNN")
         explainers[name] = get_explainer(name, {})
     return explainers
 

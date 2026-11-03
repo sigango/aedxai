@@ -20,7 +20,12 @@ if TYPE_CHECKING:
 
 
 class BBoxPriorExplainer(XAIExplainer):
-    """Gaussian centred on the detection box (sigma = half the box side)."""
+    """Gaussian centred on the detection box (sigma = ``sigma_scale`` x half the box side)."""
+
+    def __init__(self, config: Mapping[str, Any]) -> None:
+        defaults = {"sigma_scale": 1.0, "name": "bbox_prior"}
+        defaults.update(dict(config))
+        super().__init__(defaults)
 
     def explain(
         self,
@@ -32,10 +37,10 @@ class BBoxPriorExplainer(XAIExplainer):
         """Return the bbox-prior map; model and target layer are ignored."""
         del model, target_layer
         t_start = time.time()
-        saliency = _bbox_prior_map(image.shape[:2], detection)
+        saliency = _bbox_prior_map(image.shape[:2], detection, float(self.config.get("sigma_scale", 1.0)))
         return SaliencyMap(
             map=saliency,
-            method_name="bbox_prior",
+            method_name=str(self.config.get("name", "bbox_prior")),
             computation_time=float(time.time() - t_start),
             detection_id=detection.detection_id,
         )

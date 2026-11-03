@@ -21,6 +21,10 @@
 #   aedxai-DET-v1orig               legacy selector pipeline with original settings
 #   aedxai-DET-cascade              always-G-CAME -> LIME cascade (needs calibrated tau)
 #   analyze-pilot | analyze-test | analyze-bdd | calibrate-tau   CPU analyses
+#   v3 evaluation (PLAN_V3_EVALUATION.md):
+#   evidence-e1priors-DET           E1: scaled bbox priors on the frozen test images
+#   analyze-e1                      E1: matched-prior audit (CPU)
+#   analyze-e3-DET                  E3: CNN verifier on raw saliency maps (GPU optional)
 set -euo pipefail
 
 TASK="${1:?usage: cluster/task.sh <task> [shard_index] [num_shards]}"
@@ -99,6 +103,7 @@ case "${TASK}" in
   evidence-calib-*) evidence calib "${TASK##*-}" config/evidence_config_lite.yaml "${COCO_IMAGES}" "${COCO_ANN}" "${MANIFEST}" coco \
                       --methods gcame --controls "" --no-maps ;;
   evidence-test-*) evidence test "${TASK##*-}" config/evidence_config_lite.yaml "${COCO_IMAGES}" "${COCO_ANN}" "${MANIFEST}" coco ;;
+  evidence-e1priors-*) evidence test "${TASK##*-}" config/evidence_config_e1_priors.yaml "${COCO_IMAGES}" "${COCO_ANN}" "${MANIFEST}" e1priors --no-maps ;;
   evidence-bdd-*) evidence test "${TASK##*-}" config/evidence_config_lite.yaml "${BDD_IMAGES}" "${BDD_ANN}" "${BDD_MANIFEST}" bdd ;;
   vlm-pilot-*) vlm "coco_dev_$(det_name "${TASK##*-}")" "${COCO_IMAGES}" ;;
   vlm-test-*) vlm "coco_test_$(det_name "${TASK##*-}")" "${COCO_IMAGES}" ;;
@@ -146,6 +151,22 @@ case "${TASK}" in
       --output-dir "results/analysis/evidence_${prefix}"
     run scripts/analyze_metric_validity.py --run-dirs "${existing[@]}" --evidence-config "${cfg}" \
       --output-dir "results/analysis/metric_validity_${prefix}"
+    ;;
+  analyze-e1)
+    pairs=()
+    for det in yolox-s fasterrcnn_resnet50_fpn_v2; do
+      [[ -d "results/evidence/coco_test_${det}" && -d "results/evidence/e1priors_test_${det}" ]] && \
+        pairs+=("results/evidence/coco_test_${det}:results/evidence/e1priors_test_${det}")
+    done
+    if (( ${#pairs[@]} == 0 )); then echo "No test/E1 run pairs found" >&2; exit 1; fi
+    run scripts/analyze_matched_priors.py --run-pairs "${pairs[@]}" \
+      --config config/evidence_config_e1_priors.yaml --output-dir results/analysis/e1_matched_priors
+    ;;
+  analyze-e3-*)
+    det="$(det_name "${TASK##*-}")"
+    run scripts/analyze_map_verifier.py --run-dir "results/evidence/coco_test_${det}" \
+      --predictions "results/analysis/evidence_coco_test/g1_predictions_coco_test_${det}.csv" \
+      --images-dir "${COCO_IMAGES}" --output-dir "results/analysis/e3_map_verifier_${det}"
     ;;
   *)
     echo "Unknown task '${TASK}'" >&2
